@@ -24,6 +24,7 @@ Since Eidos is fundamentally an image model, we can exploit the fact that images
 Concretely, consider an image divided into N patches, of which a random subset M are masked out. The encoder processes the remaining N-M visible patches, producing a latent representation that captures the global context of the image. The decoder then takes these N-M encoded patches, alongside M mask tokens, and simultaneously performs two objectives:
 - it denoises the visible patches, and
 - it reconstructs the masked patches.
+
 In particular, the reconstructed masked patches are not denoised, and instead matched to the original noisy latent. This forces the model to learn to infer the missing information from the visible patches, leading to a more robust and efficient representation. After training, we perform an additional finetuning step without masking to further improve the denoising performance.
 
 ### Flow-Anchored Consistency Modelling
@@ -41,7 +42,7 @@ Specifically, since consistency models are trained to denoise images in one step
 
 Install the dependencies, then edit `main.py` to set paths and hyperparameters. Next run
 
-```python
+```
 accelerate launch main.py --config_file config.yaml
 ```
 which will train the model and save checkpoints to the specified output directory.
