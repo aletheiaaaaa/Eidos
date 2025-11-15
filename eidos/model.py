@@ -12,6 +12,7 @@ class MaskDiT(nn.Module):
         super(MaskDiT, self).__init__()
         self.cfg = cfg
         self.seq_len = int((self.cfg.img_size / self.cfg.patch_size) ** 2)
+        self.mask_freq = None
 
         self.time_embed = TimeEmbed(cfg.encoder.d_model)
         self.end_embed = TimeEmbed(cfg.encoder.d_model)
@@ -32,8 +33,11 @@ class MaskDiT(nn.Module):
         self.enc_final = FinalBlock(cfg.d_caption, cfg.encoder.d_model, cfg.decoder.d_model)
         self.dec_final = FinalBlock(cfg.d_caption, cfg.decoder.d_model, cfg.decoder.d_model)
         self.unembed = Unembed(cfg.decoder.d_model, cfg.n_channels, cfg.patch_size, cfg.img_size)
+    
+    def set_mask_freq(self, mask_freq: float) -> None:
+        self.mask_freq = mask_freq
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor, r: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, y: torch.Tensor, t: torch.Tensor, r: torch.Tensor, seed: int = 42) -> torch.Tensor:
         device = x.device
         batch_size = x.size(0)
 
@@ -46,16 +50,16 @@ class MaskDiT(nn.Module):
         y_proj = self.caption_proj(y)
         cond = y_proj + time_emb + end_emb
 
-        num_masked = int(self.seq_len * self.cfg.mask_freq)
-        idx = torch.randint(0, self.seq_len, (batch_size, num_masked), device=device)
-        x_enc = torch.gather(x_emb, 1, idx.unsqueeze(-1).expand(-1, -1, x_emb.size(-1)))
+        num_masked = int(self.seq_len * self.mask_freq)
+        idx = torch.randint(0, self.seq_len, (batch_size, num_masked), device=device, generator=torch.Generator().manual_seed(seed))
+        x_enc = x_emb.gather(1, idx.unsqueeze(-1).expand(-1, -1, x_emb.size(-1)))
 
         for encoder in self.encoder:
             x_enc = encoder(x_enc, cond)
         x_enc = self.enc_final(x_enc)
 
         x_dec = self.mask_vector.unsqueeze(0).unsqueeze(0).expand(batch_size, self.seq_len, -1)
-        x_dec = x_dec.scatter(1, idx.unsqueeze(-1).expand(-1, -1, x_enc.size(-1)), x_enc)
+        x_dec = x_dec.scatter_(1, idx.unsqueeze(-1).expand(-1, -1, x_enc.size(-1)), x_enc)
         x_dec = x_dec + self.dec_embed(torch.arange(self.seq_len, device=device)).unsqueeze(0).expand(batch_size, self.seq_len, -1)
 
         for decoder in self.decoder:
@@ -64,34 +68,32 @@ class MaskDiT(nn.Module):
 
         x_out = self.unembed(x_dec)
 
-        return x_out
+        return x_out, idx
 
 class Diffuser:
-    def __init__(self, cfg: DiffuserConfig, device: torch.device) -> None:
-        self.device = device
-
+    def __init__(self, cfg: DiffuserConfig) -> None:
         self.cfg = cfg
 
-        self.maskdit = MaskDiT(cfg).to(device)
-        self.vae = AutoencoderKL.from_pretrained(cfg.vae).to(device).eval()
-        self.clip = CLIPModel.from_pretrained(cfg.clip).to(device).eval()
+        self.maskdit = MaskDiT(cfg)
+        self.vae = AutoencoderKL.from_pretrained(cfg.vae).eval()
+        self.clip = CLIPModel.from_pretrained(cfg.clip).eval()
         self.processor = CLIPProcessor.from_pretrained(cfg.clip)
 
     def load_denoiser(self, path: str) -> None:
-        self.maskdit.load_state_dict(torch.load(path, map_location=self.device))
+        self.maskdit.load_state_dict(torch.load(path))
 
     def generate(self, prompt: str, num_images: int = 4, num_steps: int = 2) -> torch.Tensor:
-        inputs = self.processor(text=prompt, return_tensors="pt", padding=True).to(self.device)
+        inputs = self.processor(text=prompt, return_tensors="pt", padding=True)
         y_in = self.clip.get_text_features(**inputs).expand(num_images, -1)
 
-        x_next = torch.randn((num_images, self.cfg.n_channels, self.cfg.img_size, self.cfg.img_size), device=self.device)
-        steps = torch.linspace(0, 1, num_steps + 1, device=self.device)
+        x_next = torch.randn((num_images, self.cfg.n_channels, self.cfg.img_size, self.cfg.img_size))
+        steps = torch.linspace(0, 1, num_steps + 1)
 
         for (_, (t_now, t_next)) in enumerate(zip(steps[:-1], steps[1:])):
             x_now = x_next
 
-            t_in = torch.ones(x_now.size(0), device=self.device) * t_now
-            r_in = torch.ones(x_now.size(0), device=self.device)
+            t_in = torch.ones(x_now.size(0)) * t_now
+            r_in = torch.ones(x_now.size(0))
 
             pred = self.maskdit(x_now, y_in, t_in, r_in)
 

@@ -1,0 +1,15 @@
+compute_environment: LOCAL_MACHINE
+
+distributed_type: MULTI_GPU
+num_processes: 4
+num_machines: 1
+
+mixed_precision: bf16
+
+gpu_ids: all
+use_cpu: false
+
+dynamo_backend: 'NO'
+rdzv_backend: static
+same_network: true
+downcast_bf16: no

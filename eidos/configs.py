@@ -14,7 +14,6 @@ class DiffuserConfig:
     patch_size: int
     d_caption: int
     n_channels: int
-    mask_freq: float
     vae: str
     clip: str
     model_path: str
@@ -36,10 +35,14 @@ class DataConfig:
 class TrainConfig:
     p_mean: float
     p_std: float
-    epochs: int
+    train_epochs: int
+    finetune_epochs: int
     batch_size: int
-    learning_rate: float
+    train_lr: float
+    finetune_lr: float
     weight_decay: float
+    mask_freq: float
+    mae_weight: float
     data_path: str
     save_interval: int
     output_dir: str

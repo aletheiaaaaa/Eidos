@@ -137,7 +137,7 @@ class ImgEmbed(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.silu(self.conv(x))
 
-        return einops.rearrange(x, "b d h w -> b (h w) d")
+        return einops.rearrange(x, "b c h w -> b (h w) c")
 
 class Unembed(nn.Module):
     def __init__(self, d_model: int, n_channels: int, patch_size: int, img_size: int) -> None:
@@ -151,10 +151,9 @@ class Unembed(nn.Module):
         x = F.silu(self.fc(x))
         x = einops.rearrange(
             x, 
-            "b (h w) (c p q) -> b c (h p) (w q)", 
+            "b (h w) (p p c) -> b c (h p) (w p)", 
             h=self.img_size // self.patch_size, 
-            p=self.patch_size, 
-            q=self.patch_size
+            p=self.patch_size
         )
 
         return x
