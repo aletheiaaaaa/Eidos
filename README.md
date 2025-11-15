@@ -42,7 +42,7 @@ Specifically, since consistency models are trained to denoise images in one step
 Install the dependencies, then edit `main.py` to set paths and hyperparameters. Next run
 
 ```python
-accelerate launch main.py --config_file eidos/config.yaml
+accelerate launch main.py --config_file config.yaml
 ```
 which will train the model and save checkpoints to the specified output directory.
 
