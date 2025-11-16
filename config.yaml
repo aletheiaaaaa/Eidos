@@ -1,7 +1,7 @@
 compute_environment: LOCAL_MACHINE
 
 distributed_type: MULTI_GPU
-num_processes: 4
+num_processes: 1
 num_machines: 1
 
 mixed_precision: bf16
