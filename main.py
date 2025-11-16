@@ -13,7 +13,7 @@ data_cfg = DataConfig(
     save_dir="./data",
     vae="stabilityai/sd-vae-ft-mse",
     clip="openai/clip-vit-large-patch14",
-    samples_per_shard=1000,
+    samples_per_shard=100000,
     url_col="URL",
     caption_col="TEXT",
 )
