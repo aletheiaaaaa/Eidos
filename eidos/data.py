@@ -43,7 +43,7 @@ def process_data(cfg: DataConfig) -> None:
             image_size=cfg.img_size,
             output_folder=cfg.save_dir,
             processes_count=16,
-            thread_count=64,
+            thread_count=256,
             resize_mode="center_crop",
             output_format="webdataset",
             input_format="csv",
