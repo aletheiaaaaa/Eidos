@@ -4,12 +4,10 @@ from eidos.configs import DiffuserConfig, TrainConfig, DataConfig, DiTConfig
 from eidos.data import process_data
 from eidos.train import finetune, train
 
-os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
-
 data_cfg = DataConfig(
     img_size=256,
     dataset_path="laion/relaion-art",
-    batch_size=1024,
+    batch_size=256,
     save_dir="./data",
     vae="stabilityai/sd-vae-ft-mse",
     clip="openai/clip-vit-large-patch14",
@@ -59,6 +57,8 @@ diffuser_cfg = DiffuserConfig(
 )
 
 if __name__ == "__main__":
+    os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
+
     process_data(data_cfg)
     model = Diffuser(diffuser_cfg)
     train(model, train_cfg)
