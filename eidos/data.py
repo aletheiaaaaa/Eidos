@@ -23,7 +23,7 @@ def process_data(cfg: DataConfig) -> None:
     dataset = load_dataset(path=cfg.dataset_path, split="train", streaming=True).batch(batch_size=cfg.batch_size)
     vae = AutoencoderKL.from_pretrained(cfg.vae).to(device).eval()
     clip = CLIPModel.from_pretrained(cfg.clip).to(device).eval()
-    processor = CLIPProcessor.from_pretrained(cfg.clip)
+    processor = CLIPProcessor.from_pretrained(cfg.clip, use_fast=True)
     shard_ctr = 0
 
     all_latents = []
@@ -42,7 +42,7 @@ def process_data(cfg: DataConfig) -> None:
             url_list=os.path.join(cfg.save_dir, "batch.csv"),
             image_size=cfg.img_size,
             output_folder=cfg.save_dir,
-            processes_count=4,
+            processes_count=16,
             thread_count=64,
             resize_mode="center_crop",
             output_format="webdataset",
