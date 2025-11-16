@@ -1,7 +1,10 @@
+import os
 from eidos.model import Diffuser
 from eidos.configs import DiffuserConfig, TrainConfig, DataConfig, DiTConfig
 from eidos.data import process_data
 from eidos.train import finetune, train
+
+os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 
 data_cfg = DataConfig(
     img_size=256,
