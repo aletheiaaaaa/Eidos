@@ -12,7 +12,7 @@ from diffusers import AutoencoderKL
 from img2dataset import download
 from tqdm import tqdm
 
-from configs import DataConfig
+from .configs import DataConfig
 
 os.environ["NO_ALBUMENTATIONS_UPDATE"] = "1"
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -48,8 +48,8 @@ def process_data(cfg: DataConfig) -> None:
             resize_mode="center_crop",
             output_format="webdataset",
             input_format="csv",
-            url_col="URL",
-            caption_col="TEXT",
+            url_col=cfg.url_col,
+            caption_col=cfg.caption_col,
             distributor="multiprocessing"
         )
 

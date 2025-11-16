@@ -1,11 +1,10 @@
 import torch
 from torch import nn
-from torch.nn import functional as F
 from diffusers import AutoencoderKL
 from transformers import CLIPModel, CLIPProcessor
 
-from components import ImgEmbed, TimeEmbed, DiTBlock, FinalBlock, Unembed, CaptionProj
-from configs import DiffuserConfig
+from .components import ImgEmbed, TimeEmbed, DiTBlock, FinalBlock, Unembed, CaptionProj
+from .configs import DiffuserConfig
 
 class MaskDiT(nn.Module):
     def __init__(self, cfg: DiffuserConfig) -> None:
@@ -95,7 +94,7 @@ class Diffuser:
             t_in = torch.ones(x_now.size(0)) * t_now
             r_in = torch.ones(x_now.size(0))
 
-            pred = self.maskdit(x_now, y_in, t_in, r_in)
+            pred, _ = self.maskdit(x_now, y_in, t_in, r_in)
 
             x_end = x_now + (steps[-1] - t_now) * pred
             noise = torch.rand_like(x_end)

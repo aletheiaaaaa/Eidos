@@ -30,6 +30,8 @@ class DataConfig:
     vae: str
     clip: str
     samples_per_shard: int
+    url_col: str
+    caption_col: str
 
 @dataclass
 class TrainConfig:

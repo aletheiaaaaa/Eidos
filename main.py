@@ -1,5 +1,5 @@
 from eidos.model import Diffuser
-from eidos.configs import DiffuserConfig, TrainConfig, DataConfig
+from eidos.configs import DiffuserConfig, TrainConfig, DataConfig, DiTConfig
 from eidos.data import process_data
 from eidos.train import finetune, train
 
@@ -10,7 +10,9 @@ data_cfg = DataConfig(
     save_dir="./data",
     vae="stabilityai/sd-vae-ft-mse",
     clip="openai/clip-vit-large-patch14",
-    samples_per_shard=1000
+    samples_per_shard=1000,
+    url_col="URL",
+    caption_col="TEXT",
 )
 
 train_cfg = TrainConfig(
@@ -37,14 +39,14 @@ diffuser_cfg = DiffuserConfig(
     vae="stabilityai/sd-vae-ft-mse",
     clip="openai/clip-vit-large-patch14",
     model_path="",
-    encoder=DiffuserConfig.encoder.__class__(
+    encoder=DiTConfig(
         d_model=512,
         n_heads=8,
         d_head=64,
         d_mlp=2048,
         n_layers=4
     ),
-    decoder=DiffuserConfig.decoder.__class__(
+    decoder=DiTConfig(
         d_model=128,
         n_heads=4,
         d_head=16,
