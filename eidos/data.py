@@ -64,7 +64,7 @@ def process_data(cfg: DataConfig) -> None:
             img = img.to(device)
             with torch.no_grad():
                 latents = vae.encode(img * 2 - 1).latent_dist.sample() * vae.config.scaling_factor
-                inputs = processor(text=text, return_tensors="pt", padding=True).to(device)
+                inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True).to(device)
                 embeds = clip.get_text_features(**inputs)
 
             all_latents.append(latents.squeeze(0).cpu())
