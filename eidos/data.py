@@ -53,7 +53,6 @@ def process_data(cfg: DataConfig) -> None:
         )
 
         files = os.listdir(cfg.save_dir)
-        print(f"All files in {cfg.save_dir}: {files}")
         files = [os.path.join(cfg.save_dir, file) for file in files if file.endswith(".tar")]
 
         images = wds.WebDataset(files).decode("pil").to_tuple("jpg;png", "json").map_tuple(transforms.ToTensor(), lambda x: x["caption"])
