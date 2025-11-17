@@ -66,9 +66,10 @@ def process_data(cfg: DataConfig) -> None:
                 inputs = processor(text=text, return_tensors="pt", padding=True, truncation=True).to(device)
                 embeds = clip.get_text_features(**inputs)
 
-            all_latents.append(latents.squeeze(0).cpu())
-            all_embeddings.append(embeds.squeeze(0).cpu())
+            all_latents.append(latents.cpu())
+            all_embeddings.append(embeds.cpu())
             latent_ctr += latents.size(0)
+            print(f"Processed {latent_ctr} samples in current shard.")
 
         if latent_ctr >= cfg.samples_per_shard:
             shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
