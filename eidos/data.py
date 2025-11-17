@@ -69,7 +69,6 @@ def process_data(cfg: DataConfig) -> None:
             all_latents.append(latents.cpu())
             all_embeddings.append(embeds.cpu())
             latent_ctr += latents.size(0)
-            print(f"Processed {latent_ctr} samples in current shard.")
 
         if latent_ctr >= cfg.samples_per_shard:
             shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
