@@ -28,6 +28,7 @@ def process_data(cfg: DataConfig) -> None:
 
     all_latents = []
     all_embeddings = []
+    latent_ctr = 0
 
     for batch in tqdm(dataset):
         with open(os.path.join(cfg.save_dir, "batch.csv"), "w", newline="") as file:
@@ -67,8 +68,9 @@ def process_data(cfg: DataConfig) -> None:
 
             all_latents.append(latents.squeeze(0).cpu())
             all_embeddings.append(embeds.squeeze(0).cpu())
+            latent_ctr += latents.size(0)
 
-        if len(all_latents) >= cfg.samples_per_shard:
+        if latent_ctr >= cfg.samples_per_shard:
             shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
             with h5py.File(shard_file, "w") as h5f:
                 h5f.create_dataset("latents", data=torch.stack(all_latents).numpy())
@@ -77,8 +79,9 @@ def process_data(cfg: DataConfig) -> None:
             shard_ctr += 1
             all_latents = []
             all_embeddings = []
+            latent_ctr = 0
 
-    if len(all_latents) > 0:
+    if latent_ctr > 0:
         shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
         with h5py.File(shard_file, "w") as h5f:
             h5f.create_dataset("latents", data=torch.stack(all_latents).numpy())
