@@ -43,7 +43,7 @@ def process_data(cfg: DataConfig) -> None:
             url_list=os.path.join(cfg.save_dir, "batch.csv"),
             image_size=cfg.img_size,
             output_folder=cfg.save_dir,
-            processes_count=16,
+            processes_count=8,
             thread_count=256,
             resize_mode="center_crop",
             output_format="webdataset",
@@ -58,7 +58,7 @@ def process_data(cfg: DataConfig) -> None:
 
         images = wds.WebDataset(files).decode("pil").to_tuple("jpg;png", "json").map_tuple(transforms.ToTensor(), lambda x: x["caption"])
 
-        dataloader = DataLoader(images, batch_size=cfg.batch_size, shuffle=False, num_workers=0)
+        dataloader = DataLoader(images, batch_size=128, shuffle=False, num_workers=0)
         for img, text in dataloader:
             img = img.to(device)
             with torch.no_grad():
@@ -132,7 +132,7 @@ class H5Dataset(Dataset):
             self.load_shard(shard_idx)
             self.current = shard_idx
         
-        idx = idx - self.cum_len[shard_idx - 1].item()
+        idx = idx - self.cum_len[shard_idx - 1].item() if shard_idx > 0 else idx
 
         latent = torch.from_numpy(self.latents[idx])
         embedding = torch.from_numpy(self.embeddings[idx])
