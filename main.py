@@ -6,7 +6,7 @@ from eidos.train import finetune, train
 data_cfg = DataConfig(
     img_size=256,
     dataset_path="laion/relaion-art",
-    batch_size=8192,
+    batch_size=12288,
     save_dir="./data",
     vae="stabilityai/sd-vae-ft-mse",
     clip="openai/clip-vit-large-patch14",

@@ -73,9 +73,9 @@ def process_data(cfg: DataConfig) -> None:
         if latent_ctr >= cfg.samples_per_shard:
             shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
             with h5py.File(shard_file, "w") as h5f:
-                h5f.create_dataset("latents", data=torch.stack(all_latents).numpy())
-                h5f.create_dataset("embeddings", data=torch.stack(all_embeddings).numpy())
-            
+                h5f.create_dataset("latents", data=torch.cat(all_latents, dim=0).numpy())
+                h5f.create_dataset("embeddings", data=torch.cat(all_embeddings, dim=0).numpy())
+
             shard_ctr += 1
             all_latents = []
             all_embeddings = []
@@ -84,8 +84,8 @@ def process_data(cfg: DataConfig) -> None:
     if latent_ctr > 0:
         shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
         with h5py.File(shard_file, "w") as h5f:
-            h5f.create_dataset("latents", data=torch.stack(all_latents).numpy())
-            h5f.create_dataset("embeddings", data=torch.stack(all_embeddings).numpy())
+            h5f.create_dataset("latents", data=torch.cat(all_latents, dim=0).numpy())
+            h5f.create_dataset("embeddings", data=torch.cat(all_embeddings, dim=0).numpy())
 
     for file in os.listdir(cfg.save_dir):
         if not file.endswith(".h5"):
