@@ -70,7 +70,6 @@ def process_data(cfg: DataConfig) -> None:
             all_embeddings.append(embeds.cpu())
             latent_ctr += latents.size(0)
 
-        print(latents.size())
         if latent_ctr >= cfg.samples_per_shard:
             shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
             with h5py.File(shard_file, "w") as h5f:
@@ -132,8 +131,8 @@ class H5Dataset(Dataset):
         if self.latents is None or shard_idx != self.current:
             self.load_shard(shard_idx)
             self.current = shard_idx
-        
-        idx = idx - self.cum_len[shard_idx - 1].item() if shard_idx > 0 else idx
+
+        idx = idx - self.cum_len[shard_idx].item()
 
         latent = torch.from_numpy(self.latents[idx])
         embedding = torch.from_numpy(self.embeddings[idx])
