@@ -112,8 +112,8 @@ class H5Dataset(Dataset):
             self.embeddings = h5f["embeddings"][:]
 
         shuf_idx = torch.randperm(self.latents.shape[0])
-        self.latents = self.latents[shuf_idx]
-        self.embeddings = self.embeddings[shuf_idx]
+        self.latents = self.latents[shuf_idx.numpy()]
+        self.embeddings = self.embeddings[shuf_idx.numpy()]
 
     def shard_perm(self) -> None:
         perm = torch.randperm(self.num_shards)
@@ -126,8 +126,8 @@ class H5Dataset(Dataset):
         return sum(self.shard_lengths)
 
     def __getitem__(self, idx: int):
-        shard_idx = torch.searchsorted(self.cum_len, idx, right=True).item()
-        
+        shard_idx = torch.searchsorted(self.cum_len, idx, right=True).item() - 1
+
         if self.latents is None or shard_idx != self.current:
             self.load_shard(shard_idx)
             self.current = shard_idx
