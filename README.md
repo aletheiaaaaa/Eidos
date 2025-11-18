@@ -50,7 +50,5 @@ which will train the model and save checkpoints to the specified output director
 ## Dependencies
 
 ```
-torch, torchvision, transformers, diffusers, 
-webdataset, img2dataset, datasets, h5py, accelerate, 
-einops, tqdm, wandb, jvp-flash-attention
+torch, torchvision, transformers, diffusers, webdataset, img2dataset, datasets, h5py, accelerate, einops, tqdm, wandb, jvp-flash-attention
 ```
