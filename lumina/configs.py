@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass
 class DiTConfig:
     d_model: int
@@ -7,6 +8,7 @@ class DiTConfig:
     d_head: int
     d_mlp: int
     n_layers: int
+
 
 @dataclass
 class DiffuserConfig:
@@ -18,20 +20,15 @@ class DiffuserConfig:
     clip: str
     model_path: str
 
-    encoder: DiTConfig
-    decoder: DiTConfig
+    dit: DiTConfig
+
 
 @dataclass
 class DataConfig:
-    img_size: int
-    dataset_path: str
     batch_size: int
     save_dir: str
-    vae: str
-    clip: str
     samples_per_shard: int
-    url_col: str
-    caption_col: str
+
 
 @dataclass
 class TrainConfig:
@@ -43,10 +40,6 @@ class TrainConfig:
     train_lr: float
     finetune_lr: float
     weight_decay: float
-    mask_freq: float
-    mae_weight: float
     data_path: str
     save_interval: int
     output_dir: str
-
-

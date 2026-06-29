@@ -11,6 +11,5 @@ from .model import Diffuser
 from .configs import TrainConfig
 from .data import H5Dataset
 
-accel = Accelerator(mixed_precision="bf16" if torch.cuda.is_available() else "no")
+accel = Accelerator(mixed_precision="fp8" if torch.cuda.is_available() else "no")
 device = accel.device
-

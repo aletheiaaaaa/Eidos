@@ -1,7 +1,7 @@
-from eidos.model import Diffuser
-from eidos.configs import DiffuserConfig, TrainConfig, DataConfig, DiTConfig
-from eidos.data import process_data
-from eidos.train import finetune, train
+from lumina.model import Diffuser
+from lumina.configs import DiffuserConfig, TrainConfig, DataConfig, DiTConfig
+from lumina.data import process_data
+from lumina.train import finetune, train
 
 data_cfg = DataConfig(
     img_size=256,
@@ -24,8 +24,6 @@ train_cfg = TrainConfig(
     train_lr=1e-4,
     finetune_lr=1e-5,
     weight_decay=1e-2,
-    mask_freq=0.5,
-    mae_weight=0.1,
     data_path="./data",
     save_interval=50,
     output_dir="./checkpoints"
@@ -39,19 +37,12 @@ diffuser_cfg = DiffuserConfig(
     vae="stabilityai/sd-vae-ft-mse",
     clip="openai/clip-vit-large-patch14",
     model_path="",
-    encoder=DiTConfig(
+    dit=DiTConfig(
         d_model=512,
         n_heads=8,
         d_head=64,
         d_mlp=2048,
-        n_layers=4
-    ),
-    decoder=DiTConfig(
-        d_model=128,
-        n_heads=4,
-        d_head=16,
-        d_mlp=512,
-        n_layers=2
+        n_layers=6
     ),
 )
 
