@@ -1,15 +1,16 @@
 import os
-import h5py
 import shutil
-import torch
-from torchvision import transforms
-from torch.utils.data import Dataset
-from datasets import load_dataset
-from transformers import CLIPProcessor, CLIPModel
-from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
-from tqdm import tqdm
 
-from .configs import DataConfig
+import h5py
+import torch
+from datasets import load_dataset
+from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+from torch.utils.data import Dataset
+from torchvision import transforms
+from tqdm import tqdm
+from transformers import CLIPModel, CLIPProcessor
+
+from ..utils.configs import DataConfig
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

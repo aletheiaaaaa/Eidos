@@ -1,8 +1,9 @@
 import torch
-from torch import nn 
+from torch import nn
 from torch.nn import functional as F
 from jvp_flash_attention.jvp_attention import JVPAttn
 import einops
+
 
 class MHA(nn.Module):
     def __init__(self, d_model: int, n_heads: int, d_head: int) -> None:
@@ -16,7 +17,7 @@ class MHA(nn.Module):
         self.k_proj = nn.Linear(d_model, n_heads * d_head)
         self.v_proj = nn.Linear(d_model, n_heads * d_head)
         self.o_proj = nn.Linear(n_heads * d_head, d_model)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_pos, _ = x.size()
 
@@ -29,9 +30,14 @@ class MHA(nn.Module):
         values = values.transpose(1, 2)
 
         scores = JVPAttn.fwd_dual(queries, keys, values)
-        scores = scores.transpose(1, 2).contiguous().view(batch, seq_pos, self.n_heads * self.d_head)
+        scores = (
+            scores.transpose(1, 2)
+            .contiguous()
+            .view(batch, seq_pos, self.n_heads * self.d_head)
+        )
 
         return self.o_proj(scores)
+
 
 class MLP(nn.Module):
     def __init__(self, d_model: int, d_mlp: int) -> None:
@@ -45,6 +51,7 @@ class MLP(nn.Module):
         x = self.fc2(x)
         return x
 
+
 class CaptionProj(nn.Module):
     def __init__(self, d_caption: int, d_model: int) -> None:
         super(CaptionProj, self).__init__()
@@ -54,6 +61,7 @@ class CaptionProj(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.silu(self.proj(x))
 
+
 class Modulator(nn.Module):
     def __init__(self, d_caption: int, d_model: int) -> None:
         super(Modulator, self).__init__()
@@ -61,8 +69,10 @@ class Modulator(nn.Module):
         self.alpha = nn.Linear(d_caption, d_model)
         self.beta = nn.Linear(d_caption, d_model)
         self.gamma = nn.Linear(d_caption, d_model)
-    
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    def forward(
+        self, x: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x = F.silu(x)
 
         alpha = self.alpha(x)
@@ -71,8 +81,11 @@ class Modulator(nn.Module):
 
         return alpha, beta, gamma
 
+
 class DiTBlock(nn.Module):
-    def __init__(self, d_caption: int, d_model: int, n_heads: int, d_head: int, d_mlp: int) -> None:
+    def __init__(
+        self, d_caption: int, d_model: int, n_heads: int, d_head: int, d_mlp: int
+    ) -> None:
         super(DiTBlock, self).__init__()
 
         self.ln1 = nn.LayerNorm(d_model)
@@ -92,6 +105,7 @@ class DiTBlock(nn.Module):
 
         return x
 
+
 class FinalBlock(nn.Module):
     def __init__(self, d_caption: int, d_model: int, d_out: int) -> None:
         super(FinalBlock, self).__init__()
@@ -99,7 +113,7 @@ class FinalBlock(nn.Module):
         self.ln = nn.LayerNorm(d_model)
         self.mod = Modulator(d_caption, d_model)
         self.fc = nn.Linear(d_model, d_out)
-    
+
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         alpha, beta, _ = self.mod(y)
 
@@ -107,6 +121,7 @@ class FinalBlock(nn.Module):
         x = self.fc(x)
 
         return x
+
 
 class TimeEmbed(nn.Module):
     def __init__(self, d_model: int) -> None:
@@ -128,32 +143,37 @@ class TimeEmbed(nn.Module):
 
         return x
 
+
 class ImgEmbed(nn.Module):
     def __init__(self, d_model: int, n_channels: int, patch_size: int) -> None:
         super(ImgEmbed, self).__init__()
 
         self.conv = nn.Conv2d(n_channels, d_model, patch_size, patch_size)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.silu(self.conv(x))
 
         return einops.rearrange(x, "b c h w -> b (h w) c")
 
+
 class Unembed(nn.Module):
-    def __init__(self, d_model: int, n_channels: int, patch_size: int, img_size: int) -> None:
+    def __init__(
+        self, d_model: int, n_channels: int, patch_size: int, img_size: int
+    ) -> None:
         super(Unembed, self).__init__()
         self.patch_size = patch_size
         self.img_size = img_size
 
         self.fc = nn.Linear(d_model, patch_size * patch_size * n_channels)
-    
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = F.silu(self.fc(x))
         x = einops.rearrange(
-            x, 
-            "b (h w) (p p c) -> b c (h p) (w p)", 
-            h=self.img_size // self.patch_size, 
-            p=self.patch_size
+            x,
+            "b (h w) (p p c) -> b c (h p) (w p)",
+            h=self.img_size // self.patch_size,
+            p=self.patch_size,
         )
 
         return x
+

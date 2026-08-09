@@ -1,10 +1,10 @@
 import torch
-from torch import nn
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
+from torch import nn
 from transformers import CLIPModel, CLIPProcessor
 
-from .components import ImgEmbed, TimeEmbed, DiTBlock, FinalBlock, Unembed, CaptionProj
-from .configs import DiffuserConfig
+from ..utils.configs import DiffuserConfig
+from .components import CaptionProj, DiTBlock, FinalBlock, ImgEmbed, TimeEmbed, Unembed
 
 
 class DiT(nn.Module):

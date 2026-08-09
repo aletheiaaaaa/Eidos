@@ -1,7 +1,7 @@
-from lumina.model import Diffuser
-from lumina.configs import DiffuserConfig, TrainConfig, DataConfig, DiTConfig
-from lumina.data import process_data
-from lumina.train import finetune, train
+from src.lumina.nn.model import Diffuser
+from src.lumina.train.data import process_data
+from src.lumina.train.train import finetune, train
+from src.lumina.utils.configs import DataConfig, DiffuserConfig, DiTConfig, TrainConfig
 
 data_cfg = DataConfig(
     img_size=256,
@@ -26,7 +26,7 @@ train_cfg = TrainConfig(
     weight_decay=1e-2,
     data_path="./data",
     save_interval=50,
-    output_dir="./checkpoints"
+    output_dir="./checkpoints",
 )
 
 diffuser_cfg = DiffuserConfig(
@@ -37,13 +37,7 @@ diffuser_cfg = DiffuserConfig(
     vae="stabilityai/sd-vae-ft-mse",
     clip="openai/clip-vit-large-patch14",
     model_path="",
-    dit=DiTConfig(
-        d_model=512,
-        n_heads=8,
-        d_head=64,
-        d_mlp=2048,
-        n_layers=6
-    ),
+    dit=DiTConfig(d_model=512, n_heads=8, d_head=64, d_mlp=2048, n_layers=6),
 )
 
 if __name__ == "__main__":
