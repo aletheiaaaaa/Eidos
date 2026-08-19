@@ -65,7 +65,7 @@ def process_data(cfg: DataConfig) -> None:
             inputs = processor(
                 text=texts, return_tensors="pt", padding=True, truncation=True
             ).to(device)
-            embeds = clip.get_text_features(**inputs)
+            embeds = clip.get_text_features(**inputs)[0]
 
         return latents.cpu(), embeds.cpu()
 
