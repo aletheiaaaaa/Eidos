@@ -3,7 +3,6 @@ data:
   split: train
   resolution: 512
   max_samples: 1000000
-  max_retries: 5
   encode_batch_size: 16
   save_dir: ./data
   samples_per_shard: 10000
