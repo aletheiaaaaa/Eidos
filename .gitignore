@@ -1,2 +1,5 @@
 data/
 checkpoints/
+samples/
+__pycache__/
+*.pyc

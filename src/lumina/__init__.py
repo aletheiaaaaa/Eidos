@@ -1,47 +1,28 @@
-from src.lumina.nn.model import Diffuser
-from src.lumina.train.data import process_data
-from src.lumina.train.train import finetune, train
-from src.lumina.utils.configs import DataConfig, DiffuserConfig, DiTConfig, TrainConfig
+"""Lumina: a latent diffusion transformer trained with mean-flow matching.
 
-data_cfg = DataConfig(
-    img_size=256,
-    dataset_path="laion/relaion-art",
-    batch_size=16384,
-    save_dir="./data",
-    vae="stabilityai/sd-vae-ft-mse",
-    clip="openai/clip-vit-large-patch14",
-    samples_per_shard=100000,
-    url_col="URL",
-    caption_col="TEXT",
+Only the config types are re-exported here, so that `lumina --help` does not pay
+for importing torch. The heavy pieces live in submodules and are imported
+directly:
+
+    from lumina.nn.model import DiT, Diffuser
+    from lumina.data import H5Dataset, process_data
+    from lumina.train import train
+"""
+
+from .configs import (
+    Config,
+    DataConfig,
+    DiffuserConfig,
+    DiTConfig,
+    TrainConfig,
+    load_config,
 )
 
-train_cfg = TrainConfig(
-    p_mean=-0.8,
-    p_std=1.6,
-    train_epochs=200,
-    finetune_epochs=20,
-    batch_size=128,
-    train_lr=1e-4,
-    finetune_lr=1e-5,
-    weight_decay=1e-2,
-    data_path="./data",
-    save_interval=50,
-    output_dir="./checkpoints",
-)
-
-diffuser_cfg = DiffuserConfig(
-    img_size=256,
-    patch_size=2,
-    d_caption=768,
-    n_channels=4,
-    vae="stabilityai/sd-vae-ft-mse",
-    clip="openai/clip-vit-large-patch14",
-    model_path="",
-    dit=DiTConfig(d_model=512, n_heads=8, d_head=64, d_mlp=2048, n_layers=6),
-)
-
-if __name__ == "__main__":
-    process_data(data_cfg)
-    model = Diffuser(diffuser_cfg)
-    train(model, train_cfg)
-    finetune(model, train_cfg)
+__all__ = [
+    "Config",
+    "DataConfig",
+    "DiTConfig",
+    "DiffuserConfig",
+    "TrainConfig",
+    "load_config",
+]

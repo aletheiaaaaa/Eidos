@@ -1,15 +1,43 @@
-compute_environment: LOCAL_MACHINE
+# Lumina training config. Every key is optional; anything omitted falls back to
+# the defaults in src/lumina/configs.py. Override at the command line with
+# `--set section.key=value`, e.g. `lumina --set train.lr=3e-4 train`.
 
-distributed_type: MULTI_GPU
-num_processes: 1
-num_machines: 1
+data:
+  dataset: Fhrozen/relaion-art
+  split: train
+  resolution: 512            # source images are resized+center-cropped to this
+  stream_batch_size: 16384   # streaming read size, not the training batch size
+  save_dir: ./data
+  samples_per_shard: 10000   # a shard is buffered in RAM before being written
+  vae: stabilityai/sd-vae-ft-mse
+  clip: openai/clip-vit-large-patch14
 
-mixed_precision: bf16
+train:
+  p_mean: -0.4               # logit-normal timestep sampler
+  p_std: 1.0
+  p_ratio: 0.25              # fraction of the batch trained on r < t
+  n_warmup: 5                # warmup length, in epochs
+  n_epochs: 200
+  batch_size: 128
+  num_workers: 0             # keep 0: the dataset holds one shard in memory
+  lr: 1.0e-4
+  weight_decay: 1.0e-2
+  mixed_precision: bf16      # no | fp16 | bf16 | fp8
+  save_interval: 50          # checkpoint every N epochs, 0 to disable
+  output_dir: ./checkpoints
 
-gpu_ids: all
-use_cpu: false
+diffuser:
+  img_size: 64               # latent resolution = data.resolution // 8
+  patch_size: 2
+  d_caption: 768             # CLIP ViT-L/14 text feature width
+  n_channels: 4              # sd-vae-ft-mse latent channels
+  vae: stabilityai/sd-vae-ft-mse
+  clip: openai/clip-vit-large-patch14
+  model_path: ""             # denoiser weights to load for generate/resume
 
-dynamo_backend: 'NO'
-rdzv_backend: static
-same_network: true
-downcast_bf16: no
+  dit:
+    d_model: 512
+    n_heads: 8
+    d_head: 64
+    d_mlp: 2048
+    n_layers: 6

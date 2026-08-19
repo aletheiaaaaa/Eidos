@@ -1,8 +1,8 @@
+import einops
 import torch
+from jvp_flash_attention.jvp_attention import JVPAttn
 from torch import nn
 from torch.nn import functional as F
-from jvp_flash_attention.jvp_attention import JVPAttn
-import einops
 
 
 class MHA(nn.Module):
@@ -13,25 +13,33 @@ class MHA(nn.Module):
         self.n_heads = n_heads
         self.d_head = d_head
 
-        self.q_proj = nn.Linear(d_model, n_heads * d_head)
-        self.k_proj = nn.Linear(d_model, n_heads * d_head)
-        self.v_proj = nn.Linear(d_model, n_heads * d_head)
-        self.o_proj = nn.Linear(n_heads * d_head, d_model)
+        self.q_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
+        self.k_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
+        self.v_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
+        self.o_proj = nn.Linear(n_heads * d_head, d_model, bias=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_pos, _ = x.size()
 
-        queries = self.q_proj(x).view(batch, seq_pos, self.n_heads, self.d_head)
-        keys = self.k_proj(x).view(batch, seq_pos, self.n_heads, self.d_head)
-        values = self.v_proj(x).view(batch, seq_pos, self.n_heads, self.d_head)
+        queries = (
+            self.q_proj(x)
+            .view(batch, seq_pos, self.n_heads, self.d_head)
+            .transpose(1, 2)
+        )
+        keys = (
+            self.k_proj(x)
+            .view(batch, seq_pos, self.n_heads, self.d_head)
+            .transpose(1, 2)
+        )
+        values = (
+            self.v_proj(x)
+            .view(batch, seq_pos, self.n_heads, self.d_head)
+            .transpose(1, 2)
+        )
 
-        queries = queries.transpose(1, 2)
-        keys = keys.transpose(1, 2)
-        values = values.transpose(1, 2)
-
-        scores = JVPAttn.fwd_dual(queries, keys, values)
         scores = (
-            scores.transpose(1, 2)
+            JVPAttn.fwd_dual(queries, keys, values)
+            .transpose(1, 2)
             .contiguous()
             .view(batch, seq_pos, self.n_heads * self.d_head)
         )
@@ -69,6 +77,10 @@ class Modulator(nn.Module):
         self.alpha = nn.Linear(d_caption, d_model)
         self.beta = nn.Linear(d_caption, d_model)
         self.gamma = nn.Linear(d_caption, d_model)
+
+        for mod in (self.alpha, self.beta, self.gamma):
+            nn.init.zeros_(mod.weight)
+            nn.init.zeros_(mod.bias)
 
     def forward(
         self, x: torch.Tensor
@@ -117,7 +129,7 @@ class FinalBlock(nn.Module):
     def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         alpha, beta, _ = self.mod(y)
 
-        x = alpha * self.ln(x) + beta
+        x = (1 + alpha) * self.ln(x) + beta
         x = self.fc(x)
 
         return x
@@ -128,20 +140,33 @@ class TimeEmbed(nn.Module):
         super().__init__()
         self.d_model = d_model
 
-        self.fc1 = nn.Linear(d_model, d_model)
-        self.fc2 = nn.Linear(d_model, d_model)
+        self.mlp1 = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.SiLU(),
+            nn.Linear(d_model, d_model),
+        )
+        self.mlp2 = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.SiLU(),
+            nn.Linear(d_model, d_model),
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        freqs = torch.arange(start=0, end=self.d_model // 2)
+    def forward(self, r: torch.Tensor, t: torch.Tensor) -> torch.Tensor:
+        freqs = torch.arange(
+            start=0, end=self.d_model // 2, device=t.device, dtype=t.dtype
+        )
         freqs = freqs / (self.d_model // 2)
         freqs = (1 / 10000) ** freqs
-        x = x.outer(freqs.to(x.dtype).to(x.device))
-        x = torch.cat([x.cos(), x.sin()], dim=1)
 
-        x = F.silu(self.fc1(x))
-        x = self.fc2(x)
+        emb = None
+        for x, mlp in zip([r, t], [self.mlp1, self.mlp2]):
+            x = x.outer(freqs)
+            x = torch.cat([x.cos(), x.sin()], dim=-1)
+            x = mlp(x)
 
-        return x
+            emb = x if emb is None else emb + x
+
+        return emb
 
 
 class ImgEmbed(nn.Module):
@@ -167,13 +192,13 @@ class Unembed(nn.Module):
         self.fc = nn.Linear(d_model, patch_size * patch_size * n_channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.silu(self.fc(x))
+        x = self.fc(x)
         x = einops.rearrange(
             x,
-            "b (h w) (p p c) -> b c (h p) (w p)",
+            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
             h=self.img_size // self.patch_size,
-            p=self.patch_size,
+            p1=self.patch_size,
+            p2=self.patch_size,
         )
 
         return x
-

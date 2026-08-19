@@ -1,5 +1,4 @@
 import os
-import shutil
 
 import h5py
 import torch
@@ -10,27 +9,33 @@ from torchvision import transforms
 from tqdm import tqdm
 from transformers import CLIPModel, CLIPProcessor
 
-from ..utils.configs import DataConfig
+from .configs import DataConfig
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def process_data(cfg: DataConfig) -> None:
-    if not os.path.exists(cfg.save_dir):
-        os.mkdir(cfg.save_dir)
+def _write_shard(
+    save_dir: str, shard_idx: int, latents: list, embeddings: list
+) -> None:
+    shard_file = os.path.join(save_dir, f"shard_{shard_idx:05d}.h5")
+    with h5py.File(shard_file, "w") as h5f:
+        h5f.create_dataset("latents", data=torch.cat(latents, dim=0).numpy())
+        h5f.create_dataset("embeddings", data=torch.cat(embeddings, dim=0).numpy())
 
-    dataset = load_dataset(
-        path="Fhrozen/relaion-art", split="train", streaming=True
-    ).batch(batch_size=cfg.batch_size)
-    vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse").to(device).eval()
-    clip = CLIPModel.from_pretrained("openai/clip-vit-large-patch14").to(device).eval()
-    processor = CLIPProcessor.from_pretrained(
-        "openai/clip-vit-large-patch14", use_fast=True
+
+def process_data(cfg: DataConfig) -> None:
+    os.makedirs(cfg.save_dir, exist_ok=True)
+
+    dataset = load_dataset(path=cfg.dataset, split=cfg.split, streaming=True).batch(
+        batch_size=cfg.stream_batch_size
     )
+    vae = AutoencoderKL.from_pretrained(cfg.vae).to(device).eval()
+    clip = CLIPModel.from_pretrained(cfg.clip).to(device).eval()
+    processor = CLIPProcessor.from_pretrained(cfg.clip, use_fast=True)
     transform = transforms.Compose(
         [
-            transforms.Resize(512),
-            transforms.CenterCrop(512),
+            transforms.Resize(cfg.resolution),
+            transforms.CenterCrop(cfg.resolution),
             transforms.ToTensor(),
         ]
     )
@@ -60,36 +65,16 @@ def process_data(cfg: DataConfig) -> None:
             all_embeddings.append(embeds.cpu())
             latent_ctr += latents.size(0)
 
-        if latent_ctr >= cfg.samples_per_shard:
-            shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
-            with h5py.File(shard_file, "w") as h5f:
-                h5f.create_dataset(
-                    "latents", data=torch.cat(all_latents, dim=0).numpy()
-                )
-                h5f.create_dataset(
-                    "embeddings", data=torch.cat(all_embeddings, dim=0).numpy()
-                )
+            if latent_ctr >= cfg.samples_per_shard:
+                _write_shard(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
 
-            shard_ctr += 1
-            all_latents = []
-            all_embeddings = []
-            latent_ctr = 0
+                shard_ctr += 1
+                all_latents = []
+                all_embeddings = []
+                latent_ctr = 0
 
     if latent_ctr > 0:
-        shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
-        with h5py.File(shard_file, "w") as h5f:
-            h5f.create_dataset("latents", data=torch.cat(all_latents, dim=0).numpy())
-            h5f.create_dataset(
-                "embeddings", data=torch.cat(all_embeddings, dim=0).numpy()
-            )
-
-    for file in os.listdir(cfg.save_dir):
-        if not file.endswith(".h5"):
-            file_path = os.path.join(cfg.save_dir, file)
-            if os.path.isdir(file_path):
-                shutil.rmtree(file_path)
-            else:
-                os.remove(file_path)
+        _write_shard(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
 
 
 class H5Dataset(Dataset):
@@ -99,6 +84,9 @@ class H5Dataset(Dataset):
             for file in os.listdir(data_dir)
             if file.endswith(".h5")
         )
+        if not self.data_files:
+            raise FileNotFoundError(f"no .h5 shards found in {data_dir}")
+
         self.shard_lengths = []
         for file in self.data_files:
             with h5py.File(file, "r") as h5f:
@@ -111,15 +99,14 @@ class H5Dataset(Dataset):
         self.current = -1
         self.latents = None
         self.embeddings = None
+        self.perm = None
 
     def load_shard(self, shard_idx: int) -> None:
         with h5py.File(self.data_files[shard_idx], "r") as h5f:
             self.latents = h5f["latents"][:]
             self.embeddings = h5f["embeddings"][:]
 
-        shuf_idx = torch.randperm(self.latents.shape[0])
-        self.latents = self.latents[shuf_idx.numpy()]
-        self.embeddings = self.embeddings[shuf_idx.numpy()]
+        self.perm = torch.randperm(self.latents.shape[0]).numpy()
 
     def shard_perm(self) -> None:
         perm = torch.randperm(self.num_shards)
@@ -129,19 +116,22 @@ class H5Dataset(Dataset):
             [torch.tensor([0]), torch.cumsum(torch.tensor(self.shard_lengths), dim=0)]
         )
         self.current = -1
+        self.latents = None
+        self.embeddings = None
+        self.perm = None
 
     def __len__(self) -> int:
         return sum(self.shard_lengths)
 
-    def __getitem__(self, idx: int):
-        shard_idx = torch.searchsorted(self.cum_len, idx, right=True).item() - 1
+    def __getitem__(self, index: int):
+        shard_idx = int(torch.searchsorted(self.cum_len, index, right=True).item()) - 1
 
         if self.latents is None or shard_idx != self.current:
             self.load_shard(shard_idx)
             self.current = shard_idx
 
-        idx = idx - self.cum_len[shard_idx].item()
+        index = self.perm[index - int(self.cum_len[shard_idx].item())]
 
-        latent = torch.from_numpy(self.latents[idx])
-        embedding = torch.from_numpy(self.embeddings[idx])
+        latent = torch.from_numpy(self.latents[index])
+        embedding = torch.from_numpy(self.embeddings[index])
         return latent, embedding
