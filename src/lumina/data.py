@@ -1,6 +1,4 @@
-import json
 import os
-import time
 
 import h5py
 import torch
@@ -46,60 +44,40 @@ def _encode(images, captions, vae, clip, processor, transform):
         ).to(device)
         embeds = clip.get_text_features(**inputs)
 
-    return latents.half().cpu(), embeds.half().cpu()
+    return latents.cpu(), embeds.cpu()
 
 
-def _load_state(save_dir: str) -> tuple[int, int]:
-    path = os.path.join(save_dir, "state.json")
-    if not os.path.exists(path):
-        return 0, 0
+def process_data(cfg: DataConfig) -> None:
+    os.makedirs(cfg.save_dir, exist_ok=True)
 
-    with open(path) as f:
-        state = json.load(f)
-
-    return state["shards"], state["consumed"]
-
-
-def _save_state(save_dir: str, shards: int, consumed: int) -> None:
-    path = os.path.join(save_dir, "state.json")
-    tmp = f"{path}.tmp"
-
-    with open(tmp, "w") as f:
-        json.dump({"shards": shards, "consumed": consumed}, f)
-
-    os.replace(tmp, path)
-
-
-def _stream(cfg: DataConfig, encoders, shard_ctr: int, consumed: int) -> tuple[int, int]:
-    vae, clip, processor, transform = encoders
-
-    dataset = load_dataset(path=cfg.dataset, split=cfg.split, streaming=True)
-    if consumed:
-        dataset = dataset.skip(consumed)
-    if cfg.max_samples > 0:
-        remaining = cfg.max_samples - consumed
-        if remaining <= 0:
-            return shard_ctr, consumed
-        dataset = dataset.take(remaining)
+    dataset = load_dataset(path=cfg.dataset, split=cfg.split, streaming=True).take(
+        cfg.max_samples
+    )
+    vae = AutoencoderKL.from_pretrained(cfg.vae).to(device).eval()
+    clip = CLIPModel.from_pretrained(cfg.clip).to(device).eval()
+    processor = CLIPProcessor.from_pretrained(cfg.clip, use_fast=True)
+    transform = transforms.Compose(
+        [
+            transforms.Resize(cfg.resolution),
+            transforms.CenterCrop(cfg.resolution),
+            transforms.ToTensor(),
+        ]
+    )
 
     all_latents = []
     all_embeddings = []
     images = []
     captions = []
-    pending = 0
+    shard_ctr = 0
     count = 0
 
     def flush() -> None:
-        nonlocal shard_ctr, consumed, pending, count
+        nonlocal shard_ctr, count
 
         _write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
 
         shard_ctr += 1
-        consumed += pending
-        pending = 0
         count = 0
-
-        _save_state(cfg.save_dir, shard_ctr, consumed)
         all_latents.clear()
         all_embeddings.clear()
 
@@ -123,68 +101,21 @@ def _stream(cfg: DataConfig, encoders, shard_ctr: int, consumed: int) -> tuple[i
         if count >= cfg.samples_per_shard:
             flush()
 
-    progress = tqdm(initial=consumed, total=cfg.max_samples or None, desc="encode")
+    progress = tqdm(total=cfg.max_samples or None, desc="encode")
 
-    try:
-        for example in dataset:
-            images.append(example["image"])
-            captions.append(example["dense_caption"])
-            pending += 1
-            progress.update(1)
+    for example in dataset:
+        images.append(example["image"])
+        captions.append(example["dense_caption"])
+        progress.update(1)
 
-            if len(images) >= cfg.encode_batch_size:
-                drain()
+        if len(images) >= cfg.encode_batch_size:
+            drain()
 
-        drain()
-        if all_latents:
-            flush()
-    except BaseException:
-        pending -= len(images)
-        images.clear()
-        captions.clear()
+    drain()
+    if all_latents:
+        flush()
 
-        if all_latents:
-            flush()
-        raise
-    finally:
-        progress.close()
-
-    return shard_ctr, consumed
-
-
-def process_data(cfg: DataConfig) -> None:
-    os.makedirs(cfg.save_dir, exist_ok=True)
-
-    encoders = (
-        AutoencoderKL.from_pretrained(cfg.vae).to(device).eval(),
-        CLIPModel.from_pretrained(cfg.clip).to(device).eval(),
-        CLIPProcessor.from_pretrained(cfg.clip, use_fast=True),
-        transforms.Compose(
-            [
-                transforms.Resize(cfg.resolution),
-                transforms.CenterCrop(cfg.resolution),
-                transforms.ToTensor(),
-            ]
-        ),
-    )
-
-    shard_ctr, consumed = _load_state(cfg.save_dir)
-    if consumed:
-        print(f"resuming after {consumed} examples, {shard_ctr} shards")
-
-    for attempt in range(cfg.max_retries + 1):
-        try:
-            _stream(cfg, encoders, shard_ctr, consumed)
-            return
-        except Exception as err:
-            shard_ctr, consumed = _load_state(cfg.save_dir)
-            if attempt == cfg.max_retries:
-                raise
-
-            wait = min(300, 15 * 2**attempt)
-            print(f"stream failed ({type(err).__name__}: {err})")
-            print(f"retry {attempt + 1}/{cfg.max_retries} in {wait}s from {consumed}")
-            time.sleep(wait)
+    progress.close()
 
 
 class H5Dataset(Dataset):
@@ -245,6 +176,6 @@ class H5Dataset(Dataset):
 
         index = self.perm[index - int(self.cum_len[shard_idx].item())]
 
-        latent = torch.from_numpy(self.latents[index]).float()
-        embedding = torch.from_numpy(self.embeddings[index]).float()
+        latent = torch.from_numpy(self.latents[index])
+        embedding = torch.from_numpy(self.embeddings[index])
         return latent, embedding
