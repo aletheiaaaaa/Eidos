@@ -1,86 +1,32 @@
-# lumina
+# Lumina
 
-A latent diffusion transformer (DiT) trained with mean-flow matching, so a
-sample takes one or two steps instead of a full denoising schedule.
+Lumina is a few-step latent diffusion transformer (DiT) trained using the MeanFlow objective, that I built to learn how DiTs work. Uses SD-VAE for image latents and CLIP for text embeddings.
 
-Images are encoded once with a frozen SD VAE and captions with CLIP ViT-L/14;
-training then runs entirely in latent space.
+## Usage
 
-## Install
+Edit `config.yaml`, then 
 
 ```sh
 uv sync
-```
-
-## Use
-
-Everything reads `config.yaml` at the project root.
-
-```sh
-lumina data                            # encode the dataset into latent shards
-lumina train                           # train the denoiser
-lumina generate "a lighthouse at dusk" # sample images into ./samples
-```
-
-Multi-GPU:
-
-```sh
+lumina data 
 accelerate launch --config_file accelerate.yaml -m lumina.cli train
+lumina generate "a lighthouse at dusk" 
 ```
 
 ## Config
 
-`config.yaml` has three sections — `data`, `train`, and `diffuser` (with a
-nested `dit`). Every key is optional and falls back to the defaults in
-`src/lumina/configs.py`. Use `lumina config` to print what actually resolved.
+Every key in `config.yaml` is optional and falls back to the defaults in `src/lumina/configs.py`; use `lumina config` to print the full configuration as seen by the model.
 
-Override single values without editing the file:
-
+You can override single values from the file via
 ```sh
-lumina --set train.lr=3e-4 --set diffuser.dit.n_layers=12 train
+accelerate launch --config_file accelerate.yaml -m lumina.cli --set train.lr=3e-4 --set diffuser.dit.n_layers=12 train
 ```
-
-Point `-c/--config` elsewhere to keep several configs around.
-
-Note that `diffuser.img_size` is the *latent* resolution: `data.resolution // 8`
-for the SD VAE.
-
-## Training
-
-Checkpoints land in `train.output_dir` every `train.save_interval` epochs and
-carry the model, optimizer, scheduler, EMA and epoch, so a run picks up exactly
-where it stopped:
-
-```sh
-lumina train --resume checkpoints/checkpoint_000050.pt
-```
-
-At the end of a run `model.pt` is written with the EMA weights (or the raw
-weights if `train.ema_decay` is 0). That is the file `generate` wants.
-
-Set `train.wandb_project` to log loss, learning rate and gradient norm to
-Weights & Biases. With `train.sample_interval` and `train.sample_prompts` set,
-images are sampled from the EMA weights every N epochs into
-`output_dir/samples/` and attached to the run.
+To use a different config, make use of the `--config` kewyord argument.
 
 ## Guidance
 
-`train.p_uncond` is the rate at which captions are replaced by a learned null
-embedding during training, which is what makes classifier-free guidance work at
-sampling time:
+To use classifier-free guidance, use the `-g` or `--guidance` flags
 
 ```sh
 lumina generate "a lighthouse at dusk" -g 3.0   # -g 1.0 turns guidance off
-```
-
-## Layout
-
-```
-src/lumina/
-  cli.py           entry point
-  configs.py       config dataclasses + YAML loading
-  data.py          dataset encoding, shard-backed H5Dataset
-  train.py         training loop, EMA
-  nn/model.py      DiT denoiser, Diffuser sampling wrapper
-  nn/components.py attention, MLP, adaLN-zero modulation, embeddings
 ```
