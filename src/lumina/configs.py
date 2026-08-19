@@ -33,7 +33,7 @@ class DataConfig:
     split: str = "train"
     resolution: int = 512
     max_samples: int = 1_000_000
-    stream_batch_size: int = 16384
+    max_retries: int = 5
     encode_batch_size: int = 64
     save_dir: str = "./data"
     samples_per_shard: int = 10000

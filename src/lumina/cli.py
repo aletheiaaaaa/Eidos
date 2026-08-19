@@ -128,7 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_train = sub.add_parser("train", help="train the denoiser on the latent shards")
     p_train.add_argument(
-        "--resume", help="checkpoint to restore model, optimizer, scheduler and EMA from"
+        "--resume",
+        help="checkpoint to restore model, optimizer, scheduler and EMA from",
     )
     p_train.set_defaults(func=_cmd_train)
 
