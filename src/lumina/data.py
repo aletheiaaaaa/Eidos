@@ -14,39 +14,6 @@ from .configs import DataConfig
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _write(save_dir: str, shard_idx: int, latents: list, embeddings: list) -> None:
-    shard_file = os.path.join(save_dir, f"shard_{shard_idx:05d}.h5")
-    with h5py.File(shard_file, "w") as h5f:
-        h5f.create_dataset("latents", data=torch.cat(latents, dim=0).numpy())
-        h5f.create_dataset("embeddings", data=torch.cat(embeddings, dim=0).numpy())
-
-
-def _encode(images, captions, vae, clip, processor, transform):
-    pixels, texts = [], []
-    for img, text in zip(images, captions):
-        try:
-            pixels.append(transform(img.convert("RGB")))
-        except (OSError, ValueError):
-            continue
-        texts.append(text)
-
-    if not pixels:
-        return None, None
-
-    pixels = torch.stack(pixels).to(device)
-
-    with torch.no_grad():
-        latents = (
-            vae.encode(pixels * 2 - 1).latent_dist.sample() * vae.config.scaling_factor
-        )
-        inputs = processor(
-            text=texts, return_tensors="pt", padding=True, truncation=True
-        ).to(device)
-        embeds = clip.get_text_features(**inputs)
-
-    return latents.cpu(), embeds.cpu()
-
-
 def process_data(cfg: DataConfig) -> None:
     os.makedirs(cfg.save_dir, exist_ok=True)
 
@@ -55,7 +22,9 @@ def process_data(cfg: DataConfig) -> None:
     )
     vae = AutoencoderKL.from_pretrained(cfg.vae).to(device).eval()
     clip = CLIPModel.from_pretrained(cfg.clip).to(device).eval()
-    processor = CLIPProcessor.from_pretrained(cfg.clip, use_fast=True)
+    processor = CLIPProcessor.from_pretrained(
+        cfg.clip, use_fast=True, return_tensors="pt"
+    )
     transform = transforms.Compose(
         [
             transforms.Resize(cfg.resolution),
@@ -71,10 +40,39 @@ def process_data(cfg: DataConfig) -> None:
     shard_ctr = 0
     count = 0
 
+    def write(save_dir: str, shard_idx: int, latents: list, embeddings: list) -> None:
+        shard_file = os.path.join(save_dir, f"shard_{shard_idx:05d}.h5")
+        with h5py.File(shard_file, "w") as h5f:
+            h5f.create_dataset("latents", data=torch.cat(latents, dim=0).numpy())
+            h5f.create_dataset("embeddings", data=torch.cat(embeddings, dim=0).numpy())
+
+    def encode(images, captions, vae, clip, processor, transform):
+        pixels, texts = [], []
+        for img, text in zip(images, captions):
+            pixels.append(transform(img.convert("RGB")))
+            texts.append(text)
+
+        if not pixels:
+            return None, None
+
+        pixels = torch.stack(pixels).to(device)
+
+        with torch.no_grad():
+            latents = (
+                vae.encode(pixels * 2 - 1).latent_dist.sample()
+                * vae.config.scaling_factor
+            )
+            inputs = processor(
+                text=texts, return_tensors="pt", padding=True, truncation=True
+            ).to(device)
+            embeds = clip.get_text_features(**inputs)
+
+        return latents.cpu(), embeds.cpu()
+
     def flush() -> None:
         nonlocal shard_ctr, count
 
-        _write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
+        write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
 
         shard_ctr += 1
         count = 0
@@ -87,7 +85,7 @@ def process_data(cfg: DataConfig) -> None:
         if not images:
             return
 
-        latents, embeds = _encode(images, captions, vae, clip, processor, transform)
+        latents, embeds = encode(images, captions, vae, clip, processor, transform)
         images.clear()
         captions.clear()
 
