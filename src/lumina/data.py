@@ -14,13 +14,37 @@ from .configs import DataConfig
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _write_shard(
-    save_dir: str, shard_idx: int, latents: list, embeddings: list
-) -> None:
+def _write_shard(save_dir: str, shard_idx: int, latents: list, embeddings: list) -> None:
     shard_file = os.path.join(save_dir, f"shard_{shard_idx:05d}.h5")
     with h5py.File(shard_file, "w") as h5f:
         h5f.create_dataset("latents", data=torch.cat(latents, dim=0).numpy())
         h5f.create_dataset("embeddings", data=torch.cat(embeddings, dim=0).numpy())
+
+
+def _encode(images, captions, vae, clip, processor, transform):
+    pixels, texts = [], []
+    for img, text in zip(images, captions):
+        try:
+            pixels.append(transform(img.convert("RGB")))
+        except (OSError, ValueError):
+            continue
+        texts.append(text)
+
+    if not pixels:
+        return None, None
+
+    pixels = torch.stack(pixels).to(device)
+
+    with torch.no_grad():
+        latents = (
+            vae.encode(pixels * 2 - 1).latent_dist.sample() * vae.config.scaling_factor
+        )
+        inputs = processor(
+            text=texts, return_tensors="pt", padding=True, truncation=True
+        ).to(device)
+        embeds = clip.get_text_features(**inputs)
+
+    return latents.cpu(), embeds.cpu()
 
 
 def process_data(cfg: DataConfig) -> None:
@@ -39,30 +63,33 @@ def process_data(cfg: DataConfig) -> None:
             transforms.ToTensor(),
         ]
     )
-    shard_ctr = 0
 
+    shard_ctr = 0
     all_latents = []
     all_embeddings = []
     latent_ctr = 0
 
-    for batch in tqdm(dataset):
+    for batch in tqdm(dataset, desc="stream"):
         images = batch["image"]
         captions = batch["dense_caption"]
 
-        for img, text in zip(images, captions):
-            img = transform(img.convert("RGB")).unsqueeze(0).to(device)
-            with torch.no_grad():
-                latents = (
-                    vae.encode(img * 2 - 1).latent_dist.sample()
-                    * vae.config.scaling_factor
-                )
-                inputs = processor(
-                    text=text, return_tensors="pt", padding=True, truncation=True
-                ).to(device)
-                embeds = clip.get_text_features(**inputs)
+        for start in tqdm(
+            range(0, len(images), cfg.encode_batch_size), desc="encode", leave=False
+        ):
+            stop = start + cfg.encode_batch_size
+            latents, embeds = _encode(
+                images[start:stop],
+                captions[start:stop],
+                vae,
+                clip,
+                processor,
+                transform,
+            )
+            if latents is None:
+                continue
 
-            all_latents.append(latents.cpu())
-            all_embeddings.append(embeds.cpu())
+            all_latents.append(latents)
+            all_embeddings.append(embeds)
             latent_ctr += latents.size(0)
 
             if latent_ctr >= cfg.samples_per_shard:
@@ -78,23 +105,35 @@ def process_data(cfg: DataConfig) -> None:
 
 
 class H5Dataset(Dataset):
-    def __init__(self, data_dir: str) -> None:
-        self.data_files = sorted(
+    def __init__(self, data_dir: str, seed: int = 0) -> None:
+        self.base_files = sorted(
             os.path.join(data_dir, file)
             for file in os.listdir(data_dir)
             if file.endswith(".h5")
         )
-        if not self.data_files:
+        if not self.base_files:
             raise FileNotFoundError(f"no .h5 shards found in {data_dir}")
 
-        self.shard_lengths = []
-        for file in self.data_files:
+        self.base_lengths = []
+        for file in self.base_files:
             with h5py.File(file, "r") as h5f:
-                self.shard_lengths.append(h5f["latents"].shape[0])
+                self.base_lengths.append(h5f["latents"].shape[0])
+
+        self.num_shards = len(self.base_files)
+        self.seed = seed
+        self.set_epoch(0)
+
+    def set_epoch(self, epoch: int) -> None:
+        self.epoch = epoch
+
+        gen = torch.Generator().manual_seed(self.seed + epoch)
+        order = torch.randperm(self.num_shards, generator=gen).tolist()
+
+        self.data_files = [self.base_files[i] for i in order]
+        self.shard_lengths = [self.base_lengths[i] for i in order]
         self.cum_len = torch.cat(
             [torch.tensor([0]), torch.cumsum(torch.tensor(self.shard_lengths), dim=0)]
         )
-        self.num_shards = len(self.data_files)
 
         self.current = -1
         self.latents = None
@@ -106,19 +145,12 @@ class H5Dataset(Dataset):
             self.latents = h5f["latents"][:]
             self.embeddings = h5f["embeddings"][:]
 
-        self.perm = torch.randperm(self.latents.shape[0]).numpy()
-
-    def shard_perm(self) -> None:
-        perm = torch.randperm(self.num_shards)
-        self.shard_lengths = [self.shard_lengths[i] for i in perm]
-        self.data_files = [self.data_files[i] for i in perm]
-        self.cum_len = torch.cat(
-            [torch.tensor([0]), torch.cumsum(torch.tensor(self.shard_lengths), dim=0)]
+        gen = torch.Generator().manual_seed(
+            self.seed + self.epoch * 1_000_003 + shard_idx
         )
-        self.current = -1
-        self.latents = None
-        self.embeddings = None
-        self.perm = None
+        self.perm = torch.randperm(
+            self.latents.shape[0], generator=gen
+        ).numpy()
 
     def __len__(self) -> int:
         return sum(self.shard_lengths)

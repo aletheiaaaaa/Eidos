@@ -1,5 +1,3 @@
-"""Command line entry point, driven by config.yaml at the project root."""
-
 import argparse
 from pathlib import Path
 
@@ -19,14 +17,21 @@ def _cmd_train(cfg: Config, args: argparse.Namespace) -> None:
     from .train import train
 
     model = DiT(cfg.diffuser)
-    if args.resume or cfg.diffuser.model_path:
+
+    if cfg.diffuser.model_path and not args.resume:
         import torch
 
-        path = args.resume or cfg.diffuser.model_path
-        model.load_state_dict(torch.load(path, map_location="cpu", weights_only=True))
-        print(f"resumed from {path}")
+        state = torch.load(
+            cfg.diffuser.model_path, map_location="cpu", weights_only=True
+        )
+        for key in ("ema", "model"):
+            if key in state:
+                state = state[key]
+                break
+        model.load_state_dict(state)
+        print(f"initialized from {cfg.diffuser.model_path}")
 
-    train(model, cfg.train, cfg.data)
+    train(model, cfg.train, cfg.data, diffuser=cfg.diffuser, resume=args.resume)
 
 
 def _cmd_generate(cfg: Config, args: argparse.Namespace) -> None:
@@ -45,13 +50,16 @@ def _cmd_generate(cfg: Config, args: argparse.Namespace) -> None:
 
     diffuser = Diffuser(cfg.diffuser, device=device)
     images = diffuser.generate(
-        args.prompt, num_images=args.num_images, num_steps=args.num_steps
+        args.prompt,
+        num_images=args.num_images,
+        num_steps=args.num_steps,
+        guidance=args.guidance,
     )
 
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     for i, image in enumerate(images):
-        save_image(image, out_dir / f"sample_{i:03d}.png")
+        save_image(image.float(), out_dir / f"sample_{i:03d}.png")
 
     print(f"wrote {len(images)} image(s) to {out_dir}")
 
@@ -64,7 +72,6 @@ def _cmd_config(cfg: Config, args: argparse.Namespace) -> None:
 
 
 def _apply_overrides(cfg: Config, overrides: list[str]) -> None:
-    """Apply `--set section.key=value` on top of the loaded config."""
     from .configs import _build
 
     for override in overrides:
@@ -82,10 +89,6 @@ def _apply_overrides(cfg: Config, overrides: list[str]) -> None:
                 raise SystemExit(f"--set: unknown key {dotted!r}")
             target = getattr(target, key)
 
-        # Round-trip the leaf through the config builder so a --set value gets the
-        # same type checking a config.yaml value would. The raw string is handed
-        # over unparsed -- running it through YAML first would read, say,
-        # `mixed_precision=no` as the boolean False.
         leaf = keys[-1]
         if not hasattr(target, leaf):
             raise SystemExit(f"--set: unknown key {dotted!r}")
@@ -95,6 +98,7 @@ def _apply_overrides(cfg: Config, overrides: list[str]) -> None:
             checked = _build(type(target), {leaf: raw}, parent)
         except (TypeError, ValueError) as exc:
             raise SystemExit(f"--set: {exc}") from None
+
         setattr(target, leaf, getattr(checked, leaf))
 
 
@@ -123,13 +127,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_data.set_defaults(func=_cmd_data)
 
     p_train = sub.add_parser("train", help="train the denoiser on the latent shards")
-    p_train.add_argument("--resume", help="checkpoint to initialize the denoiser from")
+    p_train.add_argument(
+        "--resume", help="checkpoint to restore model, optimizer, scheduler and EMA from"
+    )
     p_train.set_defaults(func=_cmd_train)
 
     p_gen = sub.add_parser("generate", help="sample images from a trained denoiser")
     p_gen.add_argument("prompt", help="text prompt")
     p_gen.add_argument("-n", "--num-images", type=int, default=4)
     p_gen.add_argument("-s", "--num-steps", type=int, default=2)
+    p_gen.add_argument(
+        "-g", "--guidance", type=float, default=3.0, help="cfg scale, 1.0 disables"
+    )
     p_gen.add_argument("-o", "--output-dir", default="./samples")
     p_gen.add_argument("--checkpoint", help="overrides diffuser.model_path")
     p_gen.add_argument("--device", help="torch device (default: cuda if available)")
