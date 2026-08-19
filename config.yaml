@@ -44,7 +44,7 @@ diffuser:
 
   dit:
     d_model: 384
-    n_heads: 8
+    n_heads: 6
     d_head: 48
     d_mlp: 1536
-    n_layers: 6
+    n_layers: 12
