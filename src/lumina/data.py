@@ -14,7 +14,7 @@ from .configs import DataConfig
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _write_shard(save_dir: str, shard_idx: int, latents: list, embeddings: list) -> None:
+def _write(save_dir: str, shard_idx: int, latents: list, embeddings: list) -> None:
     shard_file = os.path.join(save_dir, f"shard_{shard_idx:05d}.h5")
     with h5py.File(shard_file, "w") as h5f:
         h5f.create_dataset("latents", data=torch.cat(latents, dim=0).numpy())
@@ -93,7 +93,7 @@ def process_data(cfg: DataConfig) -> None:
             latent_ctr += latents.size(0)
 
             if latent_ctr >= cfg.samples_per_shard:
-                _write_shard(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
+                _write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
 
                 shard_ctr += 1
                 all_latents = []
@@ -101,7 +101,7 @@ def process_data(cfg: DataConfig) -> None:
                 latent_ctr = 0
 
     if latent_ctr > 0:
-        _write_shard(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
+        _write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
 
 
 class H5Dataset(Dataset):
@@ -148,9 +148,7 @@ class H5Dataset(Dataset):
         gen = torch.Generator().manual_seed(
             self.seed + self.epoch * 1_000_003 + shard_idx
         )
-        self.perm = torch.randperm(
-            self.latents.shape[0], generator=gen
-        ).numpy()
+        self.perm = torch.randperm(self.latents.shape[0], generator=gen).numpy()
 
     def __len__(self) -> int:
         return sum(self.shard_lengths)

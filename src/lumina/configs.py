@@ -74,24 +74,15 @@ class Config:
 
 
 def _build(cls: type, raw: Any, path: str) -> Any:
-    if not isinstance(raw, dict):
-        raise TypeError(
-            f"{path or 'config'}: expected a mapping, got {type(raw).__name__}"
-        )
-
     known = {f.name: f for f in fields(cls)}
-    unknown = set(raw) - set(known)
-    if unknown:
-        raise ValueError(
-            f"{path or 'config'}: unknown key(s) {sorted(unknown)}; "
-            f"expected any of {sorted(known)}"
-        )
 
     kwargs = {}
     for name, value in raw.items():
         f = known[name]
         child = f"{path}.{name}" if path else name
-        typ = _NESTED[f.type] if isinstance(f.type, str) and f.type in _NESTED else f.type
+        typ = (
+            _NESTED[f.type] if isinstance(f.type, str) and f.type in _NESTED else f.type
+        )
 
         if is_dataclass(typ):
             kwargs[name] = _build(typ, value, child)
@@ -105,40 +96,14 @@ def _coerce(typ: Any, value: Any, path: str) -> Any:
     name = typ if isinstance(typ, str) else getattr(typ, "__name__", str(typ))
 
     if name == "float":
-        if isinstance(value, str):
-            try:
-                return float(value)
-            except ValueError:
-                raise TypeError(f"{path}: expected a number, got {value!r}") from None
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError(f"{path}: expected a number, got {value!r}")
         return float(value)
-
     if name == "int":
-        if isinstance(value, str):
-            try:
-                return int(value)
-            except ValueError:
-                raise TypeError(f"{path}: expected an integer, got {value!r}") from None
-        if isinstance(value, bool) or not isinstance(value, int):
-            raise TypeError(f"{path}: expected an integer, got {value!r}")
         return value
-
     if name == "bool":
-        if isinstance(value, str) and value.lower() in ("true", "false"):
-            return value.lower() == "true"
-        if not isinstance(value, bool):
-            raise TypeError(f"{path}: expected a boolean, got {value!r}")
         return value
-
     if name == "str":
-        if not isinstance(value, str):
-            raise TypeError(f"{path}: expected a string, got {value!r}")
         return value
-
     if name == "list":
-        if not isinstance(value, list):
-            raise TypeError(f"{path}: expected a list, got {value!r}")
         args = get_args(typ)
         elem = args[0] if args else str
         return [_coerce(elem, v, f"{path}[{i}]") for i, v in enumerate(value)]
