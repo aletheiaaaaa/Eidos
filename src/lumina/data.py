@@ -44,15 +44,16 @@ def _encode(images, captions, vae, clip, processor, transform):
         ).to(device)
         embeds = clip.get_text_features(**inputs)
 
-    return latents.cpu(), embeds.cpu()
+    return latents.half().cpu(), embeds.half().cpu()
 
 
 def process_data(cfg: DataConfig) -> None:
     os.makedirs(cfg.save_dir, exist_ok=True)
 
-    dataset = load_dataset(path=cfg.dataset, split=cfg.split, streaming=True).batch(
-        batch_size=cfg.stream_batch_size
-    )
+    dataset = load_dataset(path=cfg.dataset, split=cfg.split, streaming=True)
+    if cfg.max_samples > 0:
+        dataset = dataset.take(cfg.max_samples)
+    dataset = dataset.batch(batch_size=cfg.stream_batch_size)
     vae = AutoencoderKL.from_pretrained(cfg.vae).to(device).eval()
     clip = CLIPModel.from_pretrained(cfg.clip).to(device).eval()
     processor = CLIPProcessor.from_pretrained(cfg.clip, use_fast=True)
@@ -162,6 +163,6 @@ class H5Dataset(Dataset):
 
         index = self.perm[index - int(self.cum_len[shard_idx].item())]
 
-        latent = torch.from_numpy(self.latents[index])
-        embedding = torch.from_numpy(self.embeddings[index])
+        latent = torch.from_numpy(self.latents[index]).float()
+        embedding = torch.from_numpy(self.embeddings[index]).float()
         return latent, embedding

@@ -2,6 +2,7 @@ data:
   dataset: Fhrozen/relaion-art
   split: train
   resolution: 512
+  max_samples: 1000000
   stream_batch_size: 16384
   encode_batch_size: 64
   save_dir: ./data
@@ -14,8 +15,8 @@ train:
   p_std: 1.0
   p_ratio: 0.25
   p_uncond: 0.1
-  n_warmup: 5
-  n_epochs: 200
+  n_warmup: 2
+  n_epochs: 40
   batch_size: 128
   num_workers: 0
   seed: 0
@@ -26,7 +27,7 @@ train:
   mixed_precision: bf16
   log_interval: 50
   wandb_project: "lumina"
-  save_interval: 50
+  save_interval: 5
   sample_interval: 0
   sample_prompts: []
   sample_steps: 2

@@ -32,6 +32,7 @@ class DataConfig:
     dataset: str = "Fhrozen/relaion-art"
     split: str = "train"
     resolution: int = 512
+    max_samples: int = 1_000_000
     stream_batch_size: int = 16384
     encode_batch_size: int = 64
     save_dir: str = "./data"
@@ -46,8 +47,8 @@ class TrainConfig:
     p_std: float = 1.0
     p_ratio: float = 0.25
     p_uncond: float = 0.1
-    n_warmup: int = 5
-    n_epochs: int = 200
+    n_warmup: int = 2
+    n_epochs: int = 40
     batch_size: int = 128
     num_workers: int = 0
     seed: int = 0
@@ -58,7 +59,7 @@ class TrainConfig:
     mixed_precision: str = "bf16"
     log_interval: int = 50
     wandb_project: str = ""
-    save_interval: int = 50
+    save_interval: int = 5
     sample_interval: int = 0
     sample_prompts: list[str] = field(default_factory=list)
     sample_steps: int = 2
