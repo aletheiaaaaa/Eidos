@@ -1,7 +1,7 @@
 data:
   dataset: Fhrozen/relaion-art
   split: train
-  resolution: 512
+  resolution: 256
   max_samples: 1000000
   encode_batch_size: 32
   save_dir: ./data

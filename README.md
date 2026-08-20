@@ -17,10 +17,6 @@ uv run lumina generate "a lighthouse at dusk"
 
 Every key in `config.yaml` is optional and falls back to the defaults in `src/lumina/configs.py`; use `lumina config` to print the full configuration as seen by the model.
 
-You can override single values from the file via
-```sh
-uv run accelerate launch --config_file accelerate.yaml -m lumina.cli --set train.lr=3e-4 train
-```
 To use a different config, make use of the `--config` kewyord argument.
 
 ## Guidance

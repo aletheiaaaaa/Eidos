@@ -71,37 +71,6 @@ def _cmd_config(cfg: Config, args: argparse.Namespace) -> None:
     print(json.dumps(dataclasses.asdict(cfg), indent=2))
 
 
-def _apply_overrides(cfg: Config, overrides: list[str]) -> None:
-    from .configs import _build
-
-    for override in overrides:
-        if "=" not in override:
-            raise SystemExit(f"--set expects section.key=value, got {override!r}")
-
-        dotted, _, raw = override.partition("=")
-        keys = dotted.strip().split(".")
-        if len(keys) < 2:
-            raise SystemExit(f"--set expects a section-qualified key, got {dotted!r}")
-
-        target = cfg
-        for key in keys[:-1]:
-            if not hasattr(target, key):
-                raise SystemExit(f"--set: unknown key {dotted!r}")
-            target = getattr(target, key)
-
-        leaf = keys[-1]
-        if not hasattr(target, leaf):
-            raise SystemExit(f"--set: unknown key {dotted!r}")
-
-        parent = ".".join(keys[:-1])
-        try:
-            checked = _build(type(target), {leaf: raw}, parent)
-        except (TypeError, ValueError) as exc:
-            raise SystemExit(f"--set: {exc}") from None
-
-        setattr(target, leaf, getattr(checked, leaf))
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lumina", description="Train and sample the Lumina latent diffusion model."
@@ -111,14 +80,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         default=DEFAULT_CONFIG,
         help=f"path to the YAML config (default: {DEFAULT_CONFIG})",
-    )
-    parser.add_argument(
-        "--set",
-        dest="overrides",
-        action="append",
-        default=[],
-        metavar="SECTION.KEY=VALUE",
-        help="override a config value, e.g. --set train.lr=3e-4 (repeatable)",
     )
 
     sub = parser.add_subparsers(dest="command", required=True)
@@ -158,8 +119,6 @@ def main(argv: list[str] | None = None) -> None:
         cfg = load_config(args.config)
     except (OSError, TypeError, ValueError) as exc:
         raise SystemExit(f"config error: {exc}") from None
-
-    _apply_overrides(cfg, args.overrides)
 
     args.func(cfg, args)
 
