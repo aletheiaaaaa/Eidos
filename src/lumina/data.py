@@ -79,7 +79,7 @@ def process_data(cfg: DataConfig) -> None:
         all_latents.clear()
         all_embeddings.clear()
 
-    def drain() -> None:
+    def drain(is_final: bool = True) -> None:
         nonlocal count
 
         if not images:
@@ -96,7 +96,7 @@ def process_data(cfg: DataConfig) -> None:
         all_embeddings.append(embeds)
         count += latents.size(0)
 
-        if count >= cfg.samples_per_shard:
+        if is_final or count >= cfg.samples_per_shard:
             flush()
 
     progress = tqdm(total=cfg.max_samples or None, desc="encode")
@@ -109,9 +109,7 @@ def process_data(cfg: DataConfig) -> None:
         if len(images) >= cfg.encode_batch_size:
             drain()
 
-    drain()
-    if all_latents:
-        flush()
+    drain(True)
 
     progress.close()
 

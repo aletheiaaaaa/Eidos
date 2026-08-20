@@ -3,7 +3,7 @@ data:
   split: train
   resolution: 256
   max_samples: 1000000
-  encode_batch_size: 32
+  encode_batch_size: 128
   save_dir: ./data
   samples_per_shard: 10000
   vae: stabilityai/sd-vae-ft-mse
