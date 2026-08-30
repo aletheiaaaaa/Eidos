@@ -1,169 +1,74 @@
-import os
-
-import h5py
 import torch
 from datasets import load_dataset
-from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL
-from torch.utils.data import Dataset
+from torch.utils.data import IterableDataset, get_worker_info
 from torchvision import transforms
-from tqdm import tqdm
-from transformers import CLIPModel, CLIPProcessor
 
 from .configs import DataConfig
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def class_prompt(name: str, template: str) -> str:
+    label = name.split(",")[0].strip().replace("_", " ")
+
+    return template.format(label)
 
 
-def first_sentence(caption: str) -> str:
-    head = caption.strip().split(". ")[0].strip()
-    return head if head else caption.strip()
-
-
-def process_data(cfg: DataConfig) -> None:
-    os.makedirs(cfg.save_dir, exist_ok=True)
-
-    dataset = load_dataset(path=cfg.dataset, split=cfg.split, streaming=True).take(
-        cfg.max_samples
-    )
-    vae = AutoencoderKL.from_pretrained(cfg.vae).to(device).eval()
-    clip = CLIPModel.from_pretrained(cfg.clip).to(device).eval()
-    processor = CLIPProcessor.from_pretrained(
-        cfg.clip, use_fast=True, return_tensors="pt"
-    )
-    transform = transforms.Compose(
-        [
-            transforms.Resize(cfg.resolution),
-            transforms.CenterCrop(cfg.resolution),
-            transforms.ToTensor(),
-        ]
-    )
-
-    all_latents = []
-    all_embeddings = []
-    images = []
-    captions = []
-    shard_ctr = 0
-    count = 0
-
-    def process_batch(is_final: bool = False) -> None:
-        nonlocal shard_ctr, count
-
-        pixels, texts = [], []
-        for img, text in zip(images, captions):
-            pixels.append(transform(img.convert("RGB")))
-            texts.append(first_sentence(text))
-
-        if pixels:
-            pixels = torch.stack(pixels).to(device)
-
-            with torch.no_grad():
-                latents = (
-                    vae.encode(pixels * 2 - 1).latent_dist.sample()
-                    * vae.config.scaling_factor
-                )
-                inputs = processor(
-                    text=texts, return_tensors="pt", padding=True, truncation=True
-                ).to(device)
-                embeds = clip.get_text_features(**inputs).pooler_output
-
-            latents = latents.cpu()
-            embeds = embeds.cpu()
-
-            all_latents.append(latents)
-            all_embeddings.append(embeds)
-            count += latents.size(0)
-
-        images.clear()
-        captions.clear()
-
-        if all_latents and (is_final or count >= cfg.samples_per_shard):
-            shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
-            with h5py.File(shard_file, "w") as h5f:
-                h5f.create_dataset(
-                    "latents", data=torch.cat(all_latents, dim=0).numpy()
-                )
-                h5f.create_dataset(
-                    "embeddings", data=torch.cat(all_embeddings, dim=0).numpy()
-                )
-
-            shard_ctr += 1
-            count = 0
-            all_latents.clear()
-            all_embeddings.clear()
-
-    progress = tqdm(total=cfg.max_samples or None, desc="encode")
-
-    for example in dataset:
-        images.append(example["image"])
-        captions.append(example["dense_caption"])
-        progress.update(1)
-
-        if len(images) >= cfg.encode_batch_size:
-            process_batch()
-
-    process_batch(True)
-
-    progress.close()
-
-
-class H5Dataset(Dataset):
-    def __init__(self, data_dir: str, seed: int = 0) -> None:
-        self.base_files = sorted(
-            os.path.join(data_dir, file)
-            for file in os.listdir(data_dir)
-            if file.endswith(".h5")
-        )
-        if not self.base_files:
-            raise FileNotFoundError(f"no .h5 shards found in {data_dir}")
-
-        self.base_lengths = []
-        for file in self.base_files:
-            with h5py.File(file, "r") as h5f:
-                self.base_lengths.append(h5f["latents"].shape[0])
-
-        self.num_shards = len(self.base_files)
+class StreamDataset(IterableDataset):
+    def __init__(self, cfg: DataConfig, seed: int = 0) -> None:
+        self.cfg = cfg
         self.seed = seed
-        self.set_epoch(0)
+        self.epoch = 0
+
+        self.transform = transforms.Compose(
+            [
+                transforms.Resize(cfg.resolution),
+                transforms.CenterCrop(cfg.resolution),
+                transforms.ToTensor(),
+            ]
+        )
+
+        self.stream = load_dataset(cfg.dataset, split=cfg.split, streaming=True)
+
+        features = self.stream.features
+        if features is None or cfg.label_key not in features:
+            raise ValueError(
+                f"{cfg.dataset} exposes no '{cfg.label_key}' feature; "
+                "set data.label_key to the class column"
+            )
+
+        self.names = features[cfg.label_key].names
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
 
-        gen = torch.Generator().manual_seed(self.seed + epoch)
-        order = torch.randperm(self.num_shards, generator=gen).tolist()
-
-        self.data_files = [self.base_files[i] for i in order]
-        self.shard_lengths = [self.base_lengths[i] for i in order]
-        self.cum_len = torch.cat(
-            [torch.tensor([0]), torch.cumsum(torch.tensor(self.shard_lengths), dim=0)]
+    def __iter__(self):
+        stream = self.stream.shuffle(
+            seed=self.seed, buffer_size=self.cfg.shuffle_buffer
         )
 
-        self.current = -1
-        self.latents = None
-        self.embeddings = None
-        self.perm = None
+        info = get_worker_info()
+        if info is not None and info.num_workers > 1:
+            stream = stream.shard(num_shards=info.num_workers, index=info.id)
 
-    def load_shard(self, shard_idx: int) -> None:
-        with h5py.File(self.data_files[shard_idx], "r") as h5f:
-            self.latents = h5f["latents"][:]
-            self.embeddings = h5f["embeddings"][:]
+        stream.set_epoch(self.epoch)
 
-        gen = torch.Generator().manual_seed(
-            self.seed + self.epoch * 1_000_003 + shard_idx
-        )
-        self.perm = torch.randperm(self.latents.shape[0], generator=gen).numpy()
+        for example in stream:
+            image = example[self.cfg.image_key]
+            label = example[self.cfg.label_key]
 
-    def __len__(self) -> int:
-        return sum(self.shard_lengths)
+            yield (
+                self.transform(image.convert("RGB")),
+                class_prompt(self.names[label], self.cfg.prompt_template),
+            )
 
-    def __getitem__(self, index: int):
-        shard_idx = int(torch.searchsorted(self.cum_len, index, right=True).item()) - 1
 
-        if self.latents is None or shard_idx != self.current:
-            self.load_shard(shard_idx)
-            self.current = shard_idx
+def collate(batch, tokenizer, max_tokens: int):
+    pixels = torch.stack([item[0] for item in batch])
+    inputs = tokenizer(
+        [item[1] for item in batch],
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=max_tokens,
+    )
 
-        index = self.perm[index - int(self.cum_len[shard_idx].item())]
-
-        latent = torch.from_numpy(self.latents[index])
-        embedding = torch.from_numpy(self.embeddings[index])
-        return latent, embedding
+    return pixels, inputs["input_ids"], inputs["attention_mask"]

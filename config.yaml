@@ -1,12 +1,14 @@
 data:
-  dataset: Fhrozen/relaion-art
+  dataset: ILSVRC/imagenet-1k
   split: train
   resolution: 256
-  max_samples: 1000000
-  encode_batch_size: 128
-  save_dir: ./data
-  samples_per_shard: 10000
-  vae: stabilityai/sd-vae-ft-mse
+  image_key: image
+  label_key: label
+  prompt_template: "a photo of a {}"
+  shuffle_buffer: 10000
+  max_tokens: 77
+  encoder: facebook/dinov3-vitb16-pretrain-lvd1689m
+  n_stat_batches: 50
   clip: openai/clip-vit-large-patch14
 
 train:
@@ -14,10 +16,10 @@ train:
   p_std: 1.0
   p_ratio: 0.25
   p_uncond: 0.1
-  n_warmup: 5
-  n_epochs: 200
+  n_warmup: 1000
+  max_steps: 200000
   batch_size: 128
-  num_workers: 0
+  num_workers: 8
   seed: 0
   lr: 1.0e-4
   weight_decay: 1.0e-2
@@ -27,25 +29,24 @@ train:
   compile: true
   log_interval: 50
   wandb_project: "lumina"
-  save_interval: 10
-  sample_interval: 2
+  save_interval: 5000
+  sample_interval: 2500
   sample_prompts:
-    - "a lighthouse at dusk"
-    - "an oil painting of a harbour at sunrise"
-    - "a watercolour portrait of a young woman"
-    - "a snow-covered pine forest under an aurora"
+    - "a photo of a golden retriever"
+    - "a photo of a monarch butterfly"
+    - "a photo of a espresso maker"
+    - "a photo of a volcano"
   sample_steps: 2
   sample_guidance: 3.0
   output_dir: ./checkpoints
 
 diffuser:
-  img_size: 32
-  patch_size: 2
+  img_size: 16
+  patch_size: 1
   d_caption: 768
-  n_channels: 4
-  vae: stabilityai/sd-vae-ft-mse
+  n_channels: 768
   clip: openai/clip-vit-large-patch14
-  model_path: ""
+  decoder_path: ""
 
   dit:
     d_model: 768

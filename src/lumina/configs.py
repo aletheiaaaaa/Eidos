@@ -16,27 +16,28 @@ class DiTConfig:
 
 @dataclass
 class DiffuserConfig:
-    img_size: int = 64
-    patch_size: int = 2
+    img_size: int = 16
+    patch_size: int = 1
     d_caption: int = 768
-    n_channels: int = 4
-    vae: str = "stabilityai/sd-vae-ft-mse"
+    n_channels: int = 768
     clip: str = "openai/clip-vit-large-patch14"
-    model_path: str = ""
+    decoder_path: str = ""
 
     dit: DiTConfig = field(default_factory=DiTConfig)
 
 
 @dataclass
 class DataConfig:
-    dataset: str = "Fhrozen/relaion-art"
+    dataset: str = "ILSVRC/imagenet-1k"
     split: str = "train"
-    resolution: int = 512
-    max_samples: int = 1_000_000
-    encode_batch_size: int = 64
-    save_dir: str = "./data"
-    samples_per_shard: int = 10000
-    vae: str = "stabilityai/sd-vae-ft-mse"
+    resolution: int = 256
+    image_key: str = "image"
+    label_key: str = "label"
+    prompt_template: str = "a photo of a {}"
+    shuffle_buffer: int = 10000
+    max_tokens: int = 77
+    encoder: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+    n_stat_batches: int = 50
     clip: str = "openai/clip-vit-large-patch14"
 
 
@@ -46,8 +47,8 @@ class TrainConfig:
     p_std: float = 1.0
     p_ratio: float = 0.25
     p_uncond: float = 0.1
-    n_warmup: int = 5
-    n_epochs: int = 200
+    n_warmup: int = 1000
+    max_steps: int = 200_000
     batch_size: int = 128
     num_workers: int = 0
     seed: int = 0
@@ -59,8 +60,8 @@ class TrainConfig:
     compile: bool = True
     log_interval: int = 50
     wandb_project: str = ""
-    save_interval: int = 50
-    sample_interval: int = 0
+    save_interval: int = 5000
+    sample_interval: int = 2500
     sample_prompts: list[str] = field(default_factory=list)
     sample_steps: int = 2
     sample_guidance: float = 3.0

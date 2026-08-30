@@ -1,5 +1,6 @@
 import contextlib
 import dataclasses
+import functools
 import math
 import os
 
@@ -11,9 +12,11 @@ from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torchvision.utils import save_image
 from tqdm import tqdm
+from transformers import CLIPTextModel, CLIPTokenizerFast
 
 from .configs import DataConfig, DiffuserConfig, TrainConfig
-from .data import H5Dataset
+from .data import StreamDataset, collate
+from .nn.encoder import DinoEncoder
 from .nn.model import Diffuser, DiT
 
 
@@ -80,18 +83,23 @@ def train(
             config={"train": dataclasses.asdict(cfg), "data": dataclasses.asdict(data)},
         )
 
-    dataset = H5Dataset(data_dir=data.save_dir, seed=cfg.seed)
+    tokenizer = CLIPTokenizerFast.from_pretrained(data.clip)
+
+    dataset = StreamDataset(data, seed=cfg.seed)
     dataloader = DataLoader(
         dataset,
         batch_size=cfg.batch_size,
-        shuffle=False,
         num_workers=cfg.num_workers,
+        drop_last=True,
+        collate_fn=functools.partial(
+            collate, tokenizer=tokenizer, max_tokens=data.max_tokens
+        ),
     )
 
-    def lr_lambda(epoch: int) -> float:
-        if epoch < cfg.n_warmup:
-            return (epoch + 1) / max(cfg.n_warmup, 1)
-        progress = (epoch - cfg.n_warmup) / max(cfg.n_epochs - cfg.n_warmup, 1)
+    def lr_lambda(step: int) -> float:
+        if step < cfg.n_warmup:
+            return (step + 1) / max(cfg.n_warmup, 1)
+        progress = (step - cfg.n_warmup) / max(cfg.max_steps - cfg.n_warmup, 1)
         return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
 
     optimizer = optim.AdamW(
@@ -103,6 +111,11 @@ def train(
         model, dataloader, optimizer, scheduler
     )
 
+    text_encoder = (
+        CLIPTextModel.from_pretrained(data.clip).to(device).eval().requires_grad_(False)
+    )
+    encoder = DinoEncoder(data.encoder).to(device)
+
     net = accel.unwrap_model(model)
     ema = EMA(net, cfg.ema_decay) if cfg.ema_decay > 0 else None
 
@@ -111,7 +124,7 @@ def train(
 
     os.makedirs(cfg.output_dir, exist_ok=True)
 
-    start_epoch = 0
+    start_step = 0
     if resume:
         state = torch.load(resume, map_location="cpu", weights_only=True)
         if "model" in state:
@@ -120,12 +133,23 @@ def train(
             scheduler.load_state_dict(state["scheduler"])
             if ema is not None and "ema" in state:
                 ema.load_state_dict(state["ema"])
-            start_epoch = state["epoch"]
+            if "stats" in state:
+                encoder.load_stats(state["stats"])
+            start_step = state["step"]
         else:
             net.load_state_dict(state)
-        accel.print(f"resumed from {resume} at epoch {start_epoch}")
+        accel.print(f"resumed from {resume} at step {start_step}")
 
-    def step(x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
+    if not bool(encoder.pixel_fitted):
+        encoder.fit_stats(dataloader, data.n_stat_batches)
+        pixel = [round(v, 4) for v in encoder.pixel_mean.flatten().tolist()]
+        accel.print(
+            f"pixel mean {pixel} latent std {encoder.latent_std.mean():.4f}"
+        )
+
+    def step(
+        x: torch.Tensor, c: torch.Tensor, mask: torch.Tensor
+    ) -> torch.Tensor:
         def adaptive_l2(error: torch.Tensor) -> torch.Tensor:
             d = error.float().pow(2).flatten(1).mean(-1)
             w = (d.detach() + 1e-3).pow(-0.5)
@@ -152,7 +176,7 @@ def train(
         v = eps - x
 
         u, dudt = torch.func.jvp(  # ty: ignore
-            lambda z, r, t: model(z, c, r, t, drop),
+            lambda z, r, t: model(z, c, r, t, drop, mask),
             (z, r, t),
             (v, torch.zeros_like(r), torch.ones_like(t)),
         )
@@ -164,31 +188,106 @@ def train(
     sampler = None
 
     can_sample = (
-        cfg.sample_interval > 0 and bool(cfg.sample_prompts) and diffuser is not None
+        cfg.sample_interval > 0
+        and bool(cfg.sample_prompts)
+        and diffuser is not None
+        and bool(diffuser.decoder_path)
     )
-    global_step = 0
+
+    if cfg.sample_interval > 0 and not can_sample:
+        accel.print("sampling disabled: set diffuser.decoder_path to decode latents")
+
+    global_step = start_step
+    epoch = 0
 
     pbar = tqdm(
-        range(start_epoch, cfg.n_epochs),
-        desc="epoch",
+        total=cfg.max_steps,
+        initial=global_step,
+        desc="step",
         disable=not accel.is_local_main_process,
     )
 
-    for epoch in pbar:
+    def save_checkpoint() -> None:
+        accel.wait_for_everyone()
+        if not accel.is_main_process:
+            return
+
+        state = {
+            "step": global_step,
+            "model": net.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "scheduler": scheduler.state_dict(),
+            "stats": encoder.stats_dict(),
+        }
+        if ema is not None:
+            state["ema"] = ema.state_dict()
+
+        accel.save(
+            state, os.path.join(cfg.output_dir, f"checkpoint_{global_step:08d}.pt")
+        )
+
+    def log_samples() -> None:
+        nonlocal sampler
+
+        accel.wait_for_everyone()
+        if not accel.is_main_process:
+            return
+
+        if sampler is None:
+            sampler = Diffuser(
+                diffuser, device=device, dit=net, stats=encoder.stats_dict()
+            )
+
+        out_dir = os.path.join(cfg.output_dir, "samples")
+        os.makedirs(out_dir, exist_ok=True)
+
+        with ema.averaged(net) if ema is not None else contextlib.nullcontext():
+            images = [
+                sampler.generate(
+                    prompt,
+                    num_images=1,
+                    num_steps=cfg.sample_steps,
+                    guidance=cfg.sample_guidance,
+                )[0]
+                for prompt in cfg.sample_prompts
+            ]
+
+        paths = []
+        for i, image in enumerate(images):
+            path = os.path.join(out_dir, f"step_{global_step:08d}_{i:02d}.png")
+            save_image(image.float(), path)
+            paths.append(path)
+
+        tracker = None
+        if cfg.wandb_project:
+            with contextlib.suppress(Exception):
+                tracker = accel.get_tracker("wandb", unwrap=True)
+
+        if tracker is not None:
+            tracker.log(
+                {
+                    "samples": [
+                        wandb.Image(path, caption=prompt)
+                        for path, prompt in zip(paths, cfg.sample_prompts)
+                    ]
+                },
+                step=global_step,
+            )
+
+    while global_step < cfg.max_steps:
         model.train()
         dataset.set_epoch(epoch)
         total, seen = 0.0, 0
 
-        batches = tqdm(
-            dataloader,
-            desc=f"epoch {epoch}",
-            leave=False,
-            disable=not accel.is_local_main_process,
-        )
+        for pixels, input_ids, attention_mask in dataloader:
+            with torch.no_grad():
+                latent = encoder.encode(pixels)
+                emb = text_encoder(
+                    input_ids=input_ids, attention_mask=attention_mask
+                ).last_hidden_state
 
-        for latent, emb in batches:
             optimizer.zero_grad()
-            loss = step(latent, emb)
+            loss = step(latent, emb, attention_mask)
             accel.backward(loss)
 
             grad_norm = None
@@ -198,6 +297,7 @@ def train(
                 ).item()
 
             optimizer.step()
+            scheduler.step()
 
             if ema is not None:
                 ema.update(net)
@@ -207,6 +307,7 @@ def train(
             total += value
             seen += 1
             global_step += 1
+            pbar.update(1)
 
             postfix = {
                 "loss": f"{value:.4f}",
@@ -215,7 +316,7 @@ def train(
             }
             if grad_norm is not None:
                 postfix["gn"] = f"{grad_norm:.2f}"
-            batches.set_postfix(postfix, refresh=False)
+            pbar.set_postfix(postfix, refresh=False)
 
             if cfg.log_interval > 0 and global_step % cfg.log_interval == 0:
                 metrics = {"loss": value, "lr": lr, "epoch": epoch}
@@ -223,81 +324,27 @@ def train(
                     metrics["grad_norm"] = grad_norm
                 accel.log(metrics, step=global_step)
 
-        batches.close()
-        scheduler.step()
+            if cfg.save_interval > 0 and global_step % cfg.save_interval == 0:
+                save_checkpoint()
 
-        mean_loss = total / max(seen, 1)
-        pbar.set_postfix(
-            loss=f"{mean_loss:.4f}", lr=f"{scheduler.get_last_lr()[0]:.2e}"
-        )
-        accel.log({"epoch_loss": mean_loss}, step=global_step)
+            if can_sample and global_step % cfg.sample_interval == 0:
+                log_samples()
 
-        if cfg.save_interval > 0 and (epoch + 1) % cfg.save_interval == 0:
-            accel.wait_for_everyone()
-            if not accel.is_main_process:
-                return
+            if global_step >= cfg.max_steps:
+                break
 
-            state = {
-                "epoch": epoch + 1,
-                "model": net.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-            }
-            if ema is not None:
-                state["ema"] = ema.state_dict()
+        accel.log({"epoch_loss": total / max(seen, 1)}, step=global_step)
+        epoch += 1
 
-            accel.save(
-                state, os.path.join(cfg.output_dir, f"checkpoint_{epoch + 1:06d}.pt")
-            )
-
-        if can_sample and (epoch + 1) % cfg.sample_interval == 0:
-            accel.wait_for_everyone()
-            if not accel.is_main_process:
-                return
-
-            if sampler is None:
-                sampler = Diffuser(diffuser, device=device, dit=net)
-
-            out_dir = os.path.join(cfg.output_dir, "samples")
-            os.makedirs(out_dir, exist_ok=True)
-
-            with ema.averaged(net) if ema is not None else contextlib.nullcontext():
-                images = [
-                    sampler.generate(
-                        prompt,
-                        num_images=1,
-                        num_steps=cfg.sample_steps,
-                        guidance=cfg.sample_guidance,
-                    )[0]
-                    for prompt in cfg.sample_prompts
-                ]
-
-            paths = []
-            for i, image in enumerate(images):
-                path = os.path.join(out_dir, f"epoch_{epoch + 1:06d}_{i:02d}.png")
-                save_image(image.float(), path)
-                paths.append(path)
-
-            tracker = None
-            if cfg.wandb_project:
-                with contextlib.suppress(Exception):
-                    tracker = accel.get_tracker("wandb", unwrap=True)
-
-            if tracker is not None:
-                tracker.log(
-                    {
-                        "samples": [
-                            wandb.Image(path, caption=prompt)
-                            for path, prompt in zip(paths, cfg.sample_prompts)
-                        ]
-                    },
-                    step=epoch + 1,
-                )
+    pbar.close()
 
     accel.wait_for_everyone()
 
     if accel.is_main_process:
         weights = ema.weights(net) if ema is not None else net.state_dict()
-        accel.save(weights, os.path.join(cfg.output_dir, "model.pt"))
+        accel.save(
+            {"model": weights, "stats": encoder.stats_dict()},
+            os.path.join(cfg.output_dir, "model.pt"),
+        )
 
     accel.end_training()

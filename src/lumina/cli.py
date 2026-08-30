@@ -6,10 +6,14 @@ from .configs import Config, load_config
 DEFAULT_CONFIG = "config.yaml"
 
 
-def _cmd_data(cfg: Config, args: argparse.Namespace) -> None:
-    from .data import process_data
+def _latest_checkpoint(output_dir: str) -> str:
+    final = Path(output_dir) / "model.pt"
+    if final.exists():
+        return str(final)
 
-    process_data(cfg.data)
+    checkpoints = sorted(Path(output_dir).glob("checkpoint_*.pt"))
+
+    return str(checkpoints[-1]) if checkpoints else ""
 
 
 def _cmd_train(cfg: Config, args: argparse.Namespace) -> None:
@@ -17,19 +21,6 @@ def _cmd_train(cfg: Config, args: argparse.Namespace) -> None:
     from .train import train
 
     model = DiT(cfg.diffuser)
-
-    if cfg.diffuser.model_path and not args.resume:
-        import torch
-
-        state = torch.load(
-            cfg.diffuser.model_path, map_location="cpu", weights_only=True
-        )
-        for key in ("ema", "model"):
-            if key in state:
-                state = state[key]
-                break
-        model.load_state_dict(state)
-        print(f"initialized from {cfg.diffuser.model_path}")
 
     train(model, cfg.train, cfg.data, diffuser=cfg.diffuser, resume=args.resume)
 
@@ -41,14 +32,17 @@ def _cmd_generate(cfg: Config, args: argparse.Namespace) -> None:
     from .nn.model import Diffuser
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
-    if args.checkpoint:
-        cfg.diffuser.model_path = args.checkpoint
-    if not cfg.diffuser.model_path:
+
+    path = args.checkpoint or _latest_checkpoint(cfg.train.output_dir)
+    if not path:
         raise SystemExit(
-            "no denoiser weights: pass --checkpoint or set diffuser.model_path"
+            f"no denoiser weights in {cfg.train.output_dir}; pass --checkpoint"
         )
 
-    diffuser = Diffuser(cfg.diffuser, device=device)
+    if not args.checkpoint:
+        print(f"using {path}")
+
+    diffuser = Diffuser(cfg.diffuser, device=device, model_path=path)
     images = diffuser.generate(
         args.prompt,
         num_images=args.num_images,
@@ -84,10 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_data = sub.add_parser("data", help="encode the source dataset into latent shards")
-    p_data.set_defaults(func=_cmd_data)
-
-    p_train = sub.add_parser("train", help="train the denoiser on the latent shards")
+    p_train = sub.add_parser("train", help="train the denoiser on the streamed dataset")
     p_train.add_argument(
         "--resume",
         help="checkpoint to restore model, optimizer, scheduler and EMA from",
@@ -102,7 +93,9 @@ def build_parser() -> argparse.ArgumentParser:
         "-g", "--guidance", type=float, default=3.0, help="cfg scale, 1.0 disables"
     )
     p_gen.add_argument("-o", "--output-dir", default="./samples")
-    p_gen.add_argument("--checkpoint", help="overrides diffuser.model_path")
+    p_gen.add_argument(
+        "--checkpoint", help="overrides the latest checkpoint in the output dir"
+    )
     p_gen.add_argument("--device", help="torch device (default: cuda if available)")
     p_gen.set_defaults(func=_cmd_generate)
 

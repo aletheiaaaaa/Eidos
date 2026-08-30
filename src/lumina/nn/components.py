@@ -5,20 +5,31 @@ from torch.nn import functional as F
 
 
 class MHA(nn.Module):
-    def __init__(self, d_model: int, n_heads: int, d_head: int) -> None:
-        super(MHA, self).__init__()
+    def __init__(
+        self, d_model: int, n_heads: int, d_head: int, d_context: int | None = None
+    ) -> None:
+        super().__init__()
 
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_head
+        self.d_context = d_model if d_context is None else d_context
 
         self.q_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
-        self.k_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
-        self.v_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
+        self.k_proj = nn.Linear(self.d_context, n_heads * d_head, bias=False)
+        self.v_proj = nn.Linear(self.d_context, n_heads * d_head, bias=False)
         self.o_proj = nn.Linear(n_heads * d_head, d_model, bias=True)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor | None = None,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        y = x if y is None else y
+
         batch, seq_pos, _ = x.size()
+        ctx_pos = y.size(1)
 
         queries = (
             self.q_proj(x)
@@ -26,17 +37,23 @@ class MHA(nn.Module):
             .transpose(1, 2)
         )
         keys = (
-            self.k_proj(x)
-            .view(batch, seq_pos, self.n_heads, self.d_head)
+            self.k_proj(y)
+            .view(batch, ctx_pos, self.n_heads, self.d_head)
             .transpose(1, 2)
         )
         values = (
-            self.v_proj(x)
-            .view(batch, seq_pos, self.n_heads, self.d_head)
+            self.v_proj(y)
+            .view(batch, ctx_pos, self.n_heads, self.d_head)
             .transpose(1, 2)
         )
 
         weights = (queries @ keys.transpose(-1, -2)) * self.d_head**-0.5
+
+        if mask is not None:
+            weights = weights.masked_fill(
+                ~mask[:, None, None, :].bool(), torch.finfo(weights.dtype).min
+            )
+
         scores = (
             (weights.softmax(dim=-1) @ values)
             .transpose(1, 2)
@@ -98,22 +115,33 @@ class DiTBlock(nn.Module):
     def __init__(
         self, d_caption: int, d_model: int, n_heads: int, d_head: int, d_mlp: int
     ) -> None:
-        super(DiTBlock, self).__init__()
+        super().__init__()
 
         self.ln1 = nn.LayerNorm(d_model)
         self.attn = MHA(d_model, n_heads, d_head)
         self.ln2 = nn.LayerNorm(d_model)
+        self.cross = MHA(d_model, n_heads, d_head, d_context=d_model)
+        self.ln3 = nn.LayerNorm(d_model)
         self.mlp = MLP(d_model, d_mlp)
 
         self.mod1 = Modulator(d_caption, d_model)
         self.mod2 = Modulator(d_caption, d_model)
+        self.mod3 = Modulator(d_caption, d_model)
 
-    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        context: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         alpha1, beta1, gamma1 = self.mod1(y)
         alpha2, beta2, gamma2 = self.mod2(y)
+        alpha3, beta3, gamma3 = self.mod3(y)
 
         x = x + gamma1 * self.attn(self.ln1(x) * (1 + alpha1) + beta1)
-        x = x + gamma2 * self.mlp(self.ln2(x) * (1 + alpha2) + beta2)
+        x = x + gamma2 * self.cross(self.ln2(x) * (1 + alpha2) + beta2, context, mask)
+        x = x + gamma3 * self.mlp(self.ln3(x) * (1 + alpha3) + beta3)
 
         return x
 
