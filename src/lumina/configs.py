@@ -56,6 +56,7 @@ class TrainConfig:
     max_grad_norm: float = 1.0
     ema_decay: float = 0.9999
     mixed_precision: str = "bf16"
+    compile: bool = True
     log_interval: int = 50
     wandb_project: str = ""
     save_interval: int = 50

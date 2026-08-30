@@ -4,7 +4,7 @@ distributed_type: MULTI_GPU
 num_processes: 1
 num_machines: 1
 
-mixed_precision: fp8
+mixed_precision: bf16
 
 gpu_ids: all
 use_cpu: false

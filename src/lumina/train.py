@@ -106,6 +106,9 @@ def train(
     net = accel.unwrap_model(model)
     ema = EMA(net, cfg.ema_decay) if cfg.ema_decay > 0 else None
 
+    if cfg.compile:
+        model = torch.compile(model)
+
     os.makedirs(cfg.output_dir, exist_ok=True)
 
     start_epoch = 0
