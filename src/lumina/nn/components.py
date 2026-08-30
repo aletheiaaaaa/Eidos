@@ -1,6 +1,6 @@
 import einops
 import torch
-from jvp_flash_attention.jvp_attention import JVPAttn
+from jvp_flash_attention.jvp_attention import JVPAttn, is_blackwell
 from torch import nn
 from torch.nn import functional as F
 
@@ -12,6 +12,7 @@ class MHA(nn.Module):
         self.d_model = d_model
         self.n_heads = n_heads
         self.d_head = d_head
+        self.warp_specialize = is_blackwell()
 
         self.q_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
         self.k_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
@@ -38,7 +39,9 @@ class MHA(nn.Module):
         )
 
         scores = (
-            JVPAttn.fwd_dual(queries, keys, values)
+            JVPAttn.fwd_dual(
+                queries, keys, values, warp_specialize=self.warp_specialize
+            )
             .transpose(1, 2)
             .contiguous()
             .view(batch, seq_pos, self.n_heads * self.d_head)
