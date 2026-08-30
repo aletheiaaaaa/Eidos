@@ -14,6 +14,11 @@ from .configs import DataConfig
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def first_sentence(caption: str) -> str:
+    head = caption.strip().split(". ")[0].strip()
+    return head if head else caption.strip()
+
+
 def process_data(cfg: DataConfig) -> None:
     os.makedirs(cfg.save_dir, exist_ok=True)
 
@@ -50,7 +55,7 @@ def process_data(cfg: DataConfig) -> None:
         pixels, texts = [], []
         for img, text in zip(images, captions):
             pixels.append(transform(img.convert("RGB")))
-            texts.append(text)
+            texts.append(first_sentence(text))
 
         if not pixels:
             return None, None
