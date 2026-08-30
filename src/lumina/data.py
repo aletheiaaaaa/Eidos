@@ -69,12 +69,12 @@ def process_data(cfg: DataConfig) -> None:
             latents = latents.cpu()
             embeds = embeds.cpu()
 
+            all_latents.append(latents)
+            all_embeddings.append(embeds)
+            count += latents.size(0)
+
         images.clear()
         captions.clear()
-
-        all_latents.append(latents)
-        all_embeddings.append(embeds)
-        count += latents.size(0)
 
         if all_latents and (is_final or count >= cfg.samples_per_shard):
             shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
