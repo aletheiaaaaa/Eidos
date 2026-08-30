@@ -13,7 +13,6 @@ dependencies = [
     "diffusers>=0.39.0",
     "einops>=0.8.2",
     "h5py>=3.16.0",
-    "jvp-flash-attention>=0.14.0",
     "pyyaml>=6.0.3",
     "torch>=2.13.0",
     "torchao>=0.18.0",
