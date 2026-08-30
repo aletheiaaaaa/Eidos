@@ -8,11 +8,12 @@ from accelerate import Accelerator
 from torch import optim
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
+from torchvision.utils import save_image
 from tqdm import tqdm
 
 from .configs import DataConfig, DiffuserConfig, TrainConfig
 from .data import H5Dataset
-from .nn.model import DiT
+from .nn.model import Diffuser, DiT
 
 
 class EMA:
@@ -120,18 +121,20 @@ def train(
             net.load_state_dict(state)
         accel.print(f"resumed from {resume} at epoch {start_epoch}")
 
-    def sample_r_t(batch: int) -> tuple[torch.Tensor, torch.Tensor]:
-        s = (torch.randn(batch, 2, device=device) * cfg.p_std + cfg.p_mean).sigmoid()
-        r, t = s.amin(dim=-1), s.amax(dim=-1)
-
-        return torch.where(torch.rand(batch, device=device) >= cfg.p_ratio, t, r), t
-
     def step(x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
         def adaptive_l2(error: torch.Tensor) -> torch.Tensor:
             d = error.float().pow(2).flatten(1).mean(-1)
             w = (d.detach() + 1e-3).pow(-0.5)
 
             return (w * d).mean()
+
+        def sample_r_t(batch: int) -> tuple[torch.Tensor, torch.Tensor]:
+            s = (
+                torch.randn(batch, 2, device=device) * cfg.p_std + cfg.p_mean
+            ).sigmoid()
+            r, t = s.amin(dim=-1), s.amax(dim=-1)
+
+            return torch.where(torch.rand(batch, device=device) >= cfg.p_ratio, t, r), t
 
         b = x.shape[0]
         r, t = sample_r_t(b)
@@ -154,75 +157,7 @@ def train(
 
         return adaptive_l2(u - tgt)
 
-    def save_checkpoint(epoch: int) -> None:
-        accel.wait_for_everyone()
-        if not accel.is_main_process:
-            return
-
-        state = {
-            "epoch": epoch + 1,
-            "model": net.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-        }
-        if ema is not None:
-            state["ema"] = ema.state_dict()
-
-        accel.save(state, os.path.join(cfg.output_dir, f"checkpoint_{epoch + 1:06d}.pt"))
-
     sampler = None
-
-    def log_samples(epoch: int) -> None:
-        nonlocal sampler
-
-        accel.wait_for_everyone()
-        if not accel.is_main_process:
-            return
-
-        from torchvision.utils import save_image
-
-        from .nn.model import Diffuser
-
-        if sampler is None:
-            sampler = Diffuser(diffuser, device=device, dit=net)
-
-        out_dir = os.path.join(cfg.output_dir, "samples")
-        os.makedirs(out_dir, exist_ok=True)
-
-        with ema.averaged(net) if ema is not None else contextlib.nullcontext():
-            images = [
-                sampler.generate(
-                    prompt,
-                    num_images=1,
-                    num_steps=cfg.sample_steps,
-                    guidance=cfg.sample_guidance,
-                )[0]
-                for prompt in cfg.sample_prompts
-            ]
-
-        paths = []
-        for i, image in enumerate(images):
-            path = os.path.join(out_dir, f"epoch_{epoch + 1:06d}_{i:02d}.png")
-            save_image(image.float(), path)
-            paths.append(path)
-
-        tracker = None
-        if cfg.wandb_project:
-            with contextlib.suppress(Exception):
-                tracker = accel.get_tracker("wandb", unwrap=True)
-
-        if tracker is not None:
-            import wandb
-
-            tracker.log(
-                {
-                    "samples": [
-                        wandb.Image(path, caption=prompt)
-                        for path, prompt in zip(paths, cfg.sample_prompts)
-                    ]
-                },
-                step=epoch + 1,
-            )
 
     can_sample = (
         cfg.sample_interval > 0 and bool(cfg.sample_prompts) and diffuser is not None
@@ -269,12 +204,71 @@ def train(
         accel.log({"epoch_loss": mean_loss}, step=global_step)
 
         if cfg.save_interval > 0 and (epoch + 1) % cfg.save_interval == 0:
-            save_checkpoint(epoch)
+            accel.wait_for_everyone()
+            if not accel.is_main_process:
+                return
+
+            state = {
+                "epoch": epoch + 1,
+                "model": net.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+            }
+            if ema is not None:
+                state["ema"] = ema.state_dict()
+
+            accel.save(
+                state, os.path.join(cfg.output_dir, f"checkpoint_{epoch + 1:06d}.pt")
+            )
 
         if can_sample and (epoch + 1) % cfg.sample_interval == 0:
-            log_samples(epoch)
+            accel.wait_for_everyone()
+            if not accel.is_main_process:
+                return
+
+            if sampler is None:
+                sampler = Diffuser(diffuser, device=device, dit=net)
+
+            out_dir = os.path.join(cfg.output_dir, "samples")
+            os.makedirs(out_dir, exist_ok=True)
+
+            with ema.averaged(net) if ema is not None else contextlib.nullcontext():
+                images = [
+                    sampler.generate(
+                        prompt,
+                        num_images=1,
+                        num_steps=cfg.sample_steps,
+                        guidance=cfg.sample_guidance,
+                    )[0]
+                    for prompt in cfg.sample_prompts
+                ]
+
+            paths = []
+            for i, image in enumerate(images):
+                path = os.path.join(out_dir, f"epoch_{epoch + 1:06d}_{i:02d}.png")
+                save_image(image.float(), path)
+                paths.append(path)
+
+            tracker = None
+            if cfg.wandb_project:
+                with contextlib.suppress(Exception):
+                    tracker = accel.get_tracker("wandb", unwrap=True)
+
+            if tracker is not None:
+                import wandb
+
+                tracker.log(
+                    {
+                        "samples": [
+                            wandb.Image(path, caption=prompt)
+                            for path, prompt in zip(paths, cfg.sample_prompts)
+                        ]
+                    },
+                    step=epoch + 1,
+                )
 
     accel.wait_for_everyone()
+
     if accel.is_main_process:
         weights = ema.weights(net) if ema is not None else net.state_dict()
         accel.save(weights, os.path.join(cfg.output_dir, "model.pt"))
