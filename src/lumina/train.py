@@ -4,6 +4,7 @@ import math
 import os
 
 import torch
+import wandb
 from accelerate import Accelerator
 from torch import optim
 from torch.optim.lr_scheduler import LambdaLR
@@ -164,43 +165,68 @@ def train(
     )
     global_step = 0
 
-    for epoch in tqdm(range(start_epoch, cfg.n_epochs), desc="epoch"):
+    pbar = tqdm(
+        range(start_epoch, cfg.n_epochs),
+        desc="epoch",
+        disable=not accel.is_local_main_process,
+    )
+
+    for epoch in pbar:
         model.train()
         dataset.set_epoch(epoch)
         total, seen = 0.0, 0
 
-        for latent, emb in tqdm(dataloader, desc=f"epoch {epoch}", leave=False):
+        batches = tqdm(
+            dataloader,
+            desc=f"epoch {epoch}",
+            leave=False,
+            disable=not accel.is_local_main_process,
+        )
+
+        for latent, emb in batches:
             optimizer.zero_grad()
             loss = step(latent, emb)
             accel.backward(loss)
 
             grad_norm = None
             if cfg.max_grad_norm > 0 and accel.sync_gradients:
-                grad_norm = accel.clip_grad_norm_(model.parameters(), cfg.max_grad_norm)
+                grad_norm = accel.clip_grad_norm_(
+                    model.parameters(), cfg.max_grad_norm
+                ).item()
 
             optimizer.step()
 
             if ema is not None:
                 ema.update(net)
 
-            total += loss.item()
+            value = loss.item()
+            lr = scheduler.get_last_lr()[0]
+            total += value
             seen += 1
             global_step += 1
 
+            postfix = {
+                "loss": f"{value:.4f}",
+                "avg": f"{total / seen:.4f}",
+                "lr": f"{lr:.2e}",
+            }
+            if grad_norm is not None:
+                postfix["gn"] = f"{grad_norm:.2f}"
+            batches.set_postfix(postfix, refresh=False)
+
             if cfg.log_interval > 0 and global_step % cfg.log_interval == 0:
-                metrics = {
-                    "loss": loss.item(),
-                    "lr": scheduler.get_last_lr()[0],
-                    "epoch": epoch,
-                }
+                metrics = {"loss": value, "lr": lr, "epoch": epoch}
                 if grad_norm is not None:
-                    metrics["grad_norm"] = grad_norm.item()
+                    metrics["grad_norm"] = grad_norm
                 accel.log(metrics, step=global_step)
 
+        batches.close()
         scheduler.step()
 
         mean_loss = total / max(seen, 1)
-        accel.print(f"epoch {epoch}: loss {mean_loss:.4f}")
+        pbar.set_postfix(
+            loss=f"{mean_loss:.4f}", lr=f"{scheduler.get_last_lr()[0]:.2e}"
+        )
         accel.log({"epoch_loss": mean_loss}, step=global_step)
 
         if cfg.save_interval > 0 and (epoch + 1) % cfg.save_interval == 0:
@@ -255,8 +281,6 @@ def train(
                     tracker = accel.get_tracker("wandb", unwrap=True)
 
             if tracker is not None:
-                import wandb
-
                 tracker.log(
                     {
                         "samples": [
