@@ -114,7 +114,9 @@ class Diffuser:
         inputs = self.processor(text=prompt, return_tensors="pt", padding=True).to(
             self.device
         )
-        y_in = self.clip.get_text_features(**inputs).expand(num_images, -1)
+        y_in = self.clip.get_text_features(**inputs).pooler_output.expand(
+            num_images, -1
+        )
 
         x = torch.randn(
             (num_images, self.cfg.n_channels, self.cfg.img_size, self.cfg.img_size),

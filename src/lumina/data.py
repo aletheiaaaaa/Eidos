@@ -65,39 +65,30 @@ def process_data(cfg: DataConfig) -> None:
             inputs = processor(
                 text=texts, return_tensors="pt", padding=True, truncation=True
             ).to(device)
-            embeds = clip.get_text_features(**inputs)[0]
+            embeds = clip.get_text_features(**inputs).pooler_output
 
         return latents.cpu(), embeds.cpu()
 
-    def flush() -> None:
+    def drain(is_final: bool = False) -> None:
         nonlocal shard_ctr, count
 
-        write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
+        if images:
+            latents, embeds = encode(images, captions, vae, clip, processor, transform)
+            images.clear()
+            captions.clear()
 
-        shard_ctr += 1
-        count = 0
-        all_latents.clear()
-        all_embeddings.clear()
+            if latents is not None:
+                all_latents.append(latents)
+                all_embeddings.append(embeds)
+                count += latents.size(0)
 
-    def drain(is_final: bool = True) -> None:
-        nonlocal count
+        if all_latents and (is_final or count >= cfg.samples_per_shard):
+            write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
 
-        if not images:
-            return
-
-        latents, embeds = encode(images, captions, vae, clip, processor, transform)
-        images.clear()
-        captions.clear()
-
-        if latents is None:
-            return
-
-        all_latents.append(latents)
-        all_embeddings.append(embeds)
-        count += latents.size(0)
-
-        if is_final or count >= cfg.samples_per_shard:
-            flush()
+            shard_ctr += 1
+            count = 0
+            all_latents.clear()
+            all_embeddings.clear()
 
     progress = tqdm(total=cfg.max_samples or None, desc="encode")
 
