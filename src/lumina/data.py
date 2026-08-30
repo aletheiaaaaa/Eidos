@@ -53,23 +53,21 @@ def process_data(cfg: DataConfig) -> None:
             pixels.append(transform(img.convert("RGB")))
             texts.append(first_sentence(text))
 
-        if not len(pixels):
-            return
+        if pixels:
+            pixels = torch.stack(pixels).to(device)
 
-        pixels = torch.stack(pixels).to(device)
+            with torch.no_grad():
+                latents = (
+                    vae.encode(pixels * 2 - 1).latent_dist.sample()
+                    * vae.config.scaling_factor
+                )
+                inputs = processor(
+                    text=texts, return_tensors="pt", padding=True, truncation=True
+                ).to(device)
+                embeds = clip.get_text_features(**inputs).pooler_output
 
-        with torch.no_grad():
-            latents = (
-                vae.encode(pixels * 2 - 1).latent_dist.sample()
-                * vae.config.scaling_factor
-            )
-            inputs = processor(
-                text=texts, return_tensors="pt", padding=True, truncation=True
-            ).to(device)
-            embeds = clip.get_text_features(**inputs).pooler_output
-
-        latents = latents.cpu()
-        embeds = embeds.cpu()
+            latents = latents.cpu()
+            embeds = embeds.cpu()
 
         images.clear()
         captions.clear()
