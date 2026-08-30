@@ -15,8 +15,8 @@ train:
   p_ratio: 0.25
   p_uncond: 0.1
   n_warmup: 5
-  n_epochs: 50
-  batch_size: 128
+  n_epochs: 100
+  batch_size: 256
   num_workers: 0
   seed: 0
   lr: 1.0e-4
