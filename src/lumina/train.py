@@ -15,8 +15,8 @@ from tqdm import tqdm
 from transformers import CLIPTextModel, CLIPTokenizerFast
 
 from .configs import DataConfig, DiffuserConfig, TrainConfig
-from .data import StreamDataset, collate
-from .nn.encoder import DinoEncoder
+from .data import Stream, collate
+from .nn.encoder import Encoder
 from .nn.model import Diffuser, DiT
 
 
@@ -85,7 +85,7 @@ def train(
 
     tokenizer = CLIPTokenizerFast.from_pretrained(data.clip)
 
-    dataset = StreamDataset(data, seed=cfg.seed)
+    dataset = Stream(data, seed=cfg.seed)
     dataloader = DataLoader(
         dataset,
         batch_size=cfg.batch_size,
@@ -114,7 +114,7 @@ def train(
     text_encoder = (
         CLIPTextModel.from_pretrained(data.clip).to(device).eval().requires_grad_(False)
     )
-    encoder = DinoEncoder(data.encoder).to(device)
+    encoder = Encoder(data.encoder).to(device)
 
     net = accel.unwrap_model(model)
     ema = EMA(net, cfg.ema_decay) if cfg.ema_decay > 0 else None
@@ -143,13 +143,9 @@ def train(
     if not bool(encoder.pixel_fitted):
         encoder.fit_stats(dataloader, data.n_stat_batches)
         pixel = [round(v, 4) for v in encoder.pixel_mean.flatten().tolist()]
-        accel.print(
-            f"pixel mean {pixel} latent std {encoder.latent_std.mean():.4f}"
-        )
+        accel.print(f"pixel mean {pixel} latent std {encoder.latent_std.mean():.4f}")
 
-    def step(
-        x: torch.Tensor, c: torch.Tensor, mask: torch.Tensor
-    ) -> torch.Tensor:
+    def step(x: torch.Tensor, c: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         def adaptive_l2(error: torch.Tensor) -> torch.Tensor:
             d = error.float().pow(2).flatten(1).mean(-1)
             w = (d.detach() + 1e-3).pow(-0.5)

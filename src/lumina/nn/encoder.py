@@ -2,8 +2,6 @@ import torch
 from torch import nn
 from transformers import AutoModel
 
-STAT_KEYS = ("pixel_mean", "pixel_std", "pixel_fitted", "latent_mean", "latent_std")
-
 
 def _moments(chunks, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
     total = torch.zeros(dim)
@@ -24,7 +22,7 @@ def _moments(chunks, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
     return mean, std
 
 
-class DinoEncoder(nn.Module):
+class Encoder(nn.Module):
     def __init__(self, name: str) -> None:
         super().__init__()
 
@@ -39,10 +37,25 @@ class DinoEncoder(nn.Module):
         self.register_buffer("latent_std", torch.ones(1, self.d_latent, 1, 1))
 
     def stats_dict(self) -> dict:
-        return {key: getattr(self, key).detach().cpu().clone() for key in STAT_KEYS}
+        return {
+            key: getattr(self, key).detach().cpu().clone()
+            for key in [
+                "pixel_mean",
+                "pixel_std",
+                "pixel_fitted",
+                "latent_mean",
+                "latent_std",
+            ]
+        }
 
     def load_stats(self, stats: dict) -> None:
-        for key in STAT_KEYS:
+        for key in [
+            "pixel_mean",
+            "pixel_std",
+            "pixel_fitted",
+            "latent_mean",
+            "latent_std",
+        ]:
             getattr(self, key).copy_(stats[key])
 
     @torch.no_grad()

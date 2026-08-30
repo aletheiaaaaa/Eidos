@@ -12,7 +12,7 @@ def class_prompt(name: str, template: str) -> str:
     return template.format(label)
 
 
-class StreamDataset(IterableDataset):
+class Stream(IterableDataset):
     def __init__(self, cfg: DataConfig, seed: int = 0) -> None:
         self.cfg = cfg
         self.seed = seed
