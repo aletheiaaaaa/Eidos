@@ -6,8 +6,8 @@ from .configs import Config, load_config
 DEFAULT_CONFIG = "config.yaml"
 
 
-def _latest_checkpoint(output_dir: str) -> str:
-    final = Path(output_dir) / "model.pt"
+def _latest_checkpoint(output_dir: str, name: str = "model.pt") -> str:
+    final = Path(output_dir) / name
     if final.exists():
         return str(final)
 
@@ -16,13 +16,37 @@ def _latest_checkpoint(output_dir: str) -> str:
     return str(checkpoints[-1]) if checkpoints else ""
 
 
-def _cmd_train(cfg: Config, args: argparse.Namespace) -> None:
+def _cmd_train_denoiser(cfg: Config, args: argparse.Namespace) -> None:
     from .nn.model import DiT
-    from .train import train
+    from .train import train_denoiser
 
     model = DiT(cfg.diffuser)
 
-    train(model, cfg.train, cfg.data, diffuser=cfg.diffuser, resume=args.resume)
+    train_denoiser(
+        model,
+        cfg.diffuser.train,
+        cfg.data,
+        diffuser=cfg.diffuser,
+        decoder=cfg.decoder,
+        resume=args.resume,
+    )
+
+
+def _cmd_train_decoder(cfg: Config, args: argparse.Namespace) -> None:
+    from .nn.latents import Decoder
+    from .train import train_decoder
+
+    decoder = Decoder(cfg.decoder, cfg.diffuser.img_size)
+
+    stats = args.stats or _latest_checkpoint(cfg.diffuser.train.output_dir)
+
+    train_decoder(
+        decoder,
+        cfg.decoder.train,
+        cfg.data,
+        resume=args.resume,
+        stats=stats or None,
+    )
 
 
 def _cmd_generate(cfg: Config, args: argparse.Namespace) -> None:
@@ -33,16 +57,16 @@ def _cmd_generate(cfg: Config, args: argparse.Namespace) -> None:
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-    path = args.checkpoint or _latest_checkpoint(cfg.train.output_dir)
+    path = args.checkpoint or _latest_checkpoint(cfg.diffuser.train.output_dir)
     if not path:
         raise SystemExit(
-            f"no denoiser weights in {cfg.train.output_dir}; pass --checkpoint"
+            f"no denoiser weights in {cfg.diffuser.train.output_dir}; pass --checkpoint"
         )
 
     if not args.checkpoint:
         print(f"using {path}")
 
-    diffuser = Diffuser(cfg.diffuser, device=device, model_path=path)
+    diffuser = Diffuser(cfg.diffuser, cfg.decoder, device=device, model_path=path)
     images = diffuser.generate(
         args.prompt,
         num_images=args.num_images,
@@ -78,12 +102,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_train = sub.add_parser("train", help="train the denoiser on the streamed dataset")
-    p_train.add_argument(
+    p_denoise = sub.add_parser(
+        "train-denoiser", help="train the denoiser on the streamed dataset"
+    )
+    p_denoise.add_argument(
         "--resume",
         help="checkpoint to restore model, optimizer, scheduler and EMA from",
     )
-    p_train.set_defaults(func=_cmd_train)
+    p_denoise.set_defaults(func=_cmd_train_denoiser)
+
+    p_dec = sub.add_parser(
+        "train-decoder",
+        help="train the ViT decoder that turns latents back into pixels",
+    )
+    p_dec.add_argument(
+        "--resume",
+        help="checkpoint to restore decoder, optimizer, scheduler and EMA from",
+    )
+    p_dec.add_argument(
+        "--stats",
+        help="checkpoint to copy encoder statistics from "
+        "(defaults to the latest denoiser checkpoint, else fits its own)",
+    )
+    p_dec.set_defaults(func=_cmd_train_decoder)
 
     p_gen = sub.add_parser("generate", help="sample images from a trained denoiser")
     p_gen.add_argument("prompt", help="text prompt")

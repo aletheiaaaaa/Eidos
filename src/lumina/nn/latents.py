@@ -1,6 +1,12 @@
+import math
+
+import einops
 import torch
 from torch import nn
 from transformers import AutoModel
+
+from ..configs import DecoderConfig
+from .components import Unembed, ViTBlock
 
 
 def _moments(chunks, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -89,6 +95,9 @@ class Encoder(nn.Module):
 
     @torch.no_grad()
     def encode(self, pixels: torch.Tensor, normalize: bool = True) -> torch.Tensor:
+        return self.features(pixels, normalize)
+
+    def features(self, pixels: torch.Tensor, normalize: bool = True) -> torch.Tensor:
         if not bool(self.pixel_fitted):
             raise RuntimeError(
                 "statistics unfitted; call fit_stats before encoding "
@@ -118,5 +127,99 @@ class Encoder(nn.Module):
 
         return (grid - self.latent_mean) / self.latent_std
 
+    def normalize(self, latent: torch.Tensor) -> torch.Tensor:
+        return (latent - self.latent_mean) / self.latent_std
+
     def denormalize(self, latent: torch.Tensor) -> torch.Tensor:
         return latent * self.latent_std + self.latent_mean
+
+
+class Decoder(nn.Module):
+    def __init__(self, cfg: DecoderConfig, grid: int) -> None:
+        super().__init__()
+
+        self.grid = grid
+        self.seq_len = grid * grid
+        self.patch_size = cfg.resolution // grid
+
+        if self.patch_size * grid != cfg.resolution:
+            raise ValueError(
+                f"resolution {cfg.resolution} is not divisible by the "
+                f"{grid}x{grid} latent grid"
+            )
+
+        self.embed = nn.Linear(cfg.d_latent, cfg.d_model)
+        self.pos_embed = nn.Embedding(self.seq_len, cfg.d_model)
+
+        self.blocks = nn.ModuleList(
+            [
+                ViTBlock(cfg.d_model, cfg.n_heads, cfg.d_head, cfg.d_mlp)
+                for _ in range(cfg.n_layers)
+            ]
+        )
+
+        self.ln = nn.LayerNorm(cfg.d_model)
+        self.unembed = Unembed(cfg.d_model, 3, self.patch_size, cfg.resolution)
+
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        if latent.shape[-1] != self.grid or latent.shape[-2] != self.grid:
+            raise ValueError(
+                f"decoder expects a {self.grid}x{self.grid} latent grid, "
+                f"got {tuple(latent.shape[-2:])}"
+            )
+
+        x = einops.rearrange(latent, "b c h w -> b (h w) c")
+        pos = self.pos_embed(torch.arange(self.seq_len, device=latent.device))
+
+        x = self.embed(x) + pos.unsqueeze(0)
+
+        for block in self.blocks:
+            x = block(x)
+
+        return self.unembed(self.ln(x))
+
+
+class LatentDiscriminator(nn.Module):
+    def __init__(self, d_latent: int, n_channels: int = 64, n_layers: int = 3) -> None:
+        super().__init__()
+
+        layers = [nn.Conv2d(d_latent, n_channels, 1), nn.LeakyReLU(0.2, inplace=True)]
+
+        width = n_channels
+        for i in range(1, n_layers + 1):
+            prev, width = width, n_channels * min(2**i, 8)
+            layers += [
+                nn.Conv2d(prev, width, 3, 1, 1, bias=False),
+                nn.GroupNorm(math.gcd(32, width), width),
+                nn.LeakyReLU(0.2, inplace=True),
+            ]
+
+        layers.append(nn.Conv2d(width, 1, 1))
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, latent: torch.Tensor) -> torch.Tensor:
+        return self.net(latent)
+
+
+class PixelDiscriminator(nn.Module):
+    def __init__(self, n_channels: int = 64, n_layers: int = 3) -> None:
+        super().__init__()
+
+        layers = [nn.Conv2d(3, n_channels, 4, 2, 1), nn.LeakyReLU(0.2, inplace=True)]
+
+        width = n_channels
+        for i in range(1, n_layers + 1):
+            prev, width = width, n_channels * min(2**i, 8)
+            layers += [
+                nn.Conv2d(prev, width, 4, 2 if i < n_layers else 1, 1, bias=False),
+                nn.GroupNorm(math.gcd(32, width), width),
+                nn.LeakyReLU(0.2, inplace=True),
+            ]
+
+        layers.append(nn.Conv2d(width, 1, 4, 1, 1))
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, pixels: torch.Tensor) -> torch.Tensor:
+        return self.net(2.0 * pixels - 1.0)

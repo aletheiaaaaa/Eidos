@@ -72,3 +72,7 @@ def collate(batch, tokenizer, max_tokens: int):
     )
 
     return pixels, inputs["input_ids"], inputs["attention_mask"]
+
+
+def collate_pixels(batch):
+    return (torch.stack([item[0] for item in batch]),)

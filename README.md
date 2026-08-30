@@ -8,7 +8,8 @@ Edit `config.yaml`, then
 
 ```sh
 uv sync
-uv run accelerate launch --config_file accelerate.yaml -m lumina.cli train
+uv run accelerate launch --config_file accelerate.yaml -m lumina.cli train-decoder # train RAE decoder
+uv run accelerate launch --config_file accelerate.yaml -m lumina.cli train-denoiser # train the model itself
 uv run lumina generate "a photo of a golden retriever"
 ```
 
@@ -19,6 +20,10 @@ Both `ILSVRC/imagenet-1k` and the DINOv3 weights are gated, so run `hf auth logi
 Every key in `config.yaml` is optional and falls back to `src/lumina/configs.py`; use `lumina config` to print the full configuration used.
 
 To use a different config, make use of the `--config` kewyord argument.
+
+### Decoder
+
+**Set `decoder.path` to the output of `train-decoder` to enable `lumina generate` and sampling while training**
 
 ## Guidance
 

@@ -15,34 +15,7 @@ class DiTConfig:
 
 
 @dataclass
-class DiffuserConfig:
-    img_size: int = 16
-    patch_size: int = 1
-    d_caption: int = 768
-    n_channels: int = 768
-    clip: str = "openai/clip-vit-large-patch14"
-    decoder_path: str = ""
-
-    dit: DiTConfig = field(default_factory=DiTConfig)
-
-
-@dataclass
-class DataConfig:
-    dataset: str = "ILSVRC/imagenet-1k"
-    split: str = "train"
-    resolution: int = 256
-    image_key: str = "image"
-    label_key: str = "label"
-    prompt_template: str = "a photo of a {}"
-    shuffle_buffer: int = 10000
-    max_tokens: int = 77
-    encoder: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
-    n_stat_batches: int = 50
-    clip: str = "openai/clip-vit-large-patch14"
-
-
-@dataclass
-class TrainConfig:
+class DiffuserTrainConfig:
     p_mean: float = -0.4
     p_std: float = 1.0
     p_ratio: float = 0.25
@@ -69,10 +42,81 @@ class TrainConfig:
 
 
 @dataclass
+class DecoderTrainConfig:
+    n_warmup: int = 1000
+    max_steps: int = 100_000
+    batch_size: int = 32
+    num_workers: int = 8
+    seed: int = 0
+    lr: float = 1e-4
+    weight_decay: float = 1e-2
+    max_grad_norm: float = 1.0
+    ema_decay: float = 0.999
+    l1_weight: float = 1.0
+    lpips_weight: float = 1.0
+    lpips_net: str = "vgg"
+    gan_weight: float = 0.1
+    gan_start: int = 20_000
+    gan_backbone: str = "dino"
+    gan_lr: float = 2e-4
+    gan_channels: int = 64
+    gan_layers: int = 3
+    mixed_precision: str = "bf16"
+    compile: bool = True
+    log_interval: int = 50
+    wandb_project: str = ""
+    save_interval: int = 5000
+    sample_interval: int = 2500
+    n_samples: int = 4
+    output_dir: str = "./decoder"
+
+
+@dataclass
+class DecoderConfig:
+    path: str = ""
+    resolution: int = 256
+    d_latent: int = 768
+    d_model: int = 768
+    n_heads: int = 12
+    d_head: int = 64
+    d_mlp: int = 3072
+    n_layers: int = 12
+
+    train: DecoderTrainConfig = field(default_factory=DecoderTrainConfig)
+
+
+@dataclass
+class DiffuserConfig:
+    img_size: int = 16
+    patch_size: int = 1
+    d_caption: int = 768
+    n_channels: int = 768
+    clip: str = "openai/clip-vit-large-patch14"
+
+    dit: DiTConfig = field(default_factory=DiTConfig)
+    train: DiffuserTrainConfig = field(default_factory=DiffuserTrainConfig)
+
+
+@dataclass
+class DataConfig:
+    dataset: str = "ILSVRC/imagenet-1k"
+    split: str = "train"
+    resolution: int = 256
+    image_key: str = "image"
+    label_key: str = "label"
+    prompt_template: str = "a photo of a {}"
+    shuffle_buffer: int = 10000
+    max_tokens: int = 77
+    encoder: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
+    n_stat_batches: int = 50
+    clip: str = "openai/clip-vit-large-patch14"
+
+
+@dataclass
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
-    train: TrainConfig = field(default_factory=TrainConfig)
     diffuser: DiffuserConfig = field(default_factory=DiffuserConfig)
+    decoder: DecoderConfig = field(default_factory=DecoderConfig)
 
 
 def _build(cls: type, raw: Any, path: str) -> Any:
@@ -115,9 +159,11 @@ def _coerce(typ: Any, value: Any, path: str) -> Any:
 
 _NESTED = {
     "DataConfig": DataConfig,
-    "TrainConfig": TrainConfig,
+    "DiffuserTrainConfig": DiffuserTrainConfig,
     "DiffuserConfig": DiffuserConfig,
     "DiTConfig": DiTConfig,
+    "DecoderConfig": DecoderConfig,
+    "DecoderTrainConfig": DecoderTrainConfig,
 }
 
 

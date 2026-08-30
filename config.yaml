@@ -11,42 +11,12 @@ data:
   n_stat_batches: 50
   clip: openai/clip-vit-large-patch14
 
-train:
-  p_mean: -0.4
-  p_std: 1.0
-  p_ratio: 0.25
-  p_uncond: 0.1
-  n_warmup: 1000
-  max_steps: 200000
-  batch_size: 128
-  num_workers: 8
-  seed: 0
-  lr: 1.0e-4
-  weight_decay: 1.0e-2
-  max_grad_norm: 1.0
-  ema_decay: 0.9999
-  mixed_precision: bf16
-  compile: true
-  log_interval: 50
-  wandb_project: "lumina"
-  save_interval: 5000
-  sample_interval: 2500
-  sample_prompts:
-    - "a photo of a golden retriever"
-    - "a photo of a monarch butterfly"
-    - "a photo of a espresso maker"
-    - "a photo of a volcano"
-  sample_steps: 2
-  sample_guidance: 3.0
-  output_dir: ./checkpoints
-
 diffuser:
   img_size: 16
   patch_size: 1
   d_caption: 768
   n_channels: 768
   clip: openai/clip-vit-large-patch14
-  decoder_path: ""
 
   dit:
     d_model: 768
@@ -54,3 +24,70 @@ diffuser:
     d_head: 64
     d_mlp: 3072
     n_layers: 12
+
+  train:
+    p_mean: -0.4
+    p_std: 1.0
+    p_ratio: 0.25
+    p_uncond: 0.1
+    n_warmup: 1000
+    max_steps: 200000
+    batch_size: 128
+    num_workers: 8
+    seed: 0
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+    max_grad_norm: 1.0
+    ema_decay: 0.9999
+    mixed_precision: bf16
+    compile: true
+    log_interval: 50
+    wandb_project: "lumina"
+    save_interval: 5000
+    sample_interval: 2500
+    sample_prompts:
+      - "a photo of a golden retriever"
+      - "a photo of a monarch butterfly"
+      - "a photo of a espresso maker"
+      - "a photo of a volcano"
+    sample_steps: 2
+    sample_guidance: 3.0
+    output_dir: ./checkpoints
+
+decoder:
+  path: ""
+  resolution: 256
+  d_latent: 768
+  d_model: 768
+  n_heads: 12
+  d_head: 64
+  d_mlp: 3072
+  n_layers: 12
+
+  train:
+    n_warmup: 1000
+    max_steps: 100000
+    batch_size: 32
+    num_workers: 8
+    seed: 0
+    lr: 1.0e-4
+    weight_decay: 1.0e-2
+    max_grad_norm: 1.0
+    ema_decay: 0.999
+    l1_weight: 1.0
+    lpips_weight: 1.0
+    lpips_net: vgg
+    gan_weight: 0.1
+    gan_start: 20000
+    gan_backbone: dino
+    gan_lr: 2.0e-4
+    gan_channels: 64
+    gan_layers: 3
+    mixed_precision: bf16
+    compile: true
+    log_interval: 50
+    wandb_project: "lumina-decoder"
+    save_interval: 5000
+    sample_interval: 2500
+    n_samples: 4
+    output_dir: ./decoder

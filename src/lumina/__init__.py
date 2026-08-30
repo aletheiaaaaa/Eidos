@@ -1,17 +1,21 @@
 from .configs import (
     Config,
     DataConfig,
+    DecoderConfig,
+    DecoderTrainConfig,
     DiffuserConfig,
+    DiffuserTrainConfig,
     DiTConfig,
-    TrainConfig,
     load_config,
 )
 
 __all__ = [
     "Config",
     "DataConfig",
+    "DecoderConfig",
+    "DecoderTrainConfig",
     "DiTConfig",
     "DiffuserConfig",
-    "TrainConfig",
+    "DiffuserTrainConfig",
     "load_config",
 ]

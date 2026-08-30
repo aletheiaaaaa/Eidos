@@ -4,20 +4,40 @@ import functools
 import math
 import os
 
+import lpips
 import torch
 import wandb
 from accelerate import Accelerator
 from torch import optim
+from torch.nn import functional as F
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
-from torchvision.utils import save_image
+from torchvision.utils import make_grid, save_image
 from tqdm import tqdm
 from transformers import CLIPTextModel, CLIPTokenizerFast
 
-from .configs import DataConfig, DiffuserConfig, TrainConfig
-from .data import Stream, collate
-from .nn.encoder import Encoder
+from .configs import (
+    DataConfig,
+    DecoderConfig,
+    DecoderTrainConfig,
+    DiffuserConfig,
+    DiffuserTrainConfig,
+)
+from .data import Stream, collate, collate_pixels
+from .nn.latents import Decoder, Encoder, LatentDiscriminator, PixelDiscriminator
 from .nn.model import Diffuser, DiT
+
+
+def cosine_lr(n_warmup: int, max_steps: int):
+    def lr_lambda(step: int) -> float:
+        if step < n_warmup:
+            return (step + 1) / max(n_warmup, 1)
+
+        progress = (step - n_warmup) / max(max_steps - n_warmup, 1)
+
+        return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
+
+    return lr_lambda
 
 
 class EMA:
@@ -64,88 +84,269 @@ class EMA:
             model.load_state_dict(backup, strict=False)
 
 
-def train(
-    model: DiT,
-    cfg: TrainConfig,
-    data: DataConfig,
-    diffuser: DiffuserConfig | None = None,
-    resume: str | None = None,
-):
-    accel = Accelerator(
-        mixed_precision=cfg.mixed_precision if torch.cuda.is_available() else "no",
-        log_with="wandb" if cfg.wandb_project else None,
-    )
-    device = accel.device
+class _Runner:
+    def __init__(
+        self,
+        model: torch.nn.Module,
+        cfg: DiffuserTrainConfig | DecoderTrainConfig,
+        data: DataConfig,
+        collate_fn,
+        tag: str,
+    ) -> None:
+        self.cfg = cfg
+        self.data = data
+        self.step = 0
+        self.epoch = 0
 
-    if cfg.wandb_project:
-        accel.init_trackers(
-            cfg.wandb_project,
-            config={"train": dataclasses.asdict(cfg), "data": dataclasses.asdict(data)},
+        self.accel = Accelerator(
+            mixed_precision=cfg.mixed_precision if torch.cuda.is_available() else "no",
+            log_with="wandb" if cfg.wandb_project else None,
+        )
+        self.device = self.accel.device
+
+        if cfg.wandb_project:
+            self.accel.init_trackers(
+                cfg.wandb_project,
+                config={
+                    tag: dataclasses.asdict(cfg),
+                    "data": dataclasses.asdict(data),
+                },
+            )
+
+        self.dataset = Stream(data, seed=cfg.seed)
+        dataloader = DataLoader(
+            self.dataset,
+            batch_size=cfg.batch_size,
+            num_workers=cfg.num_workers,
+            drop_last=True,
+            collate_fn=collate_fn,
         )
 
+        optimizer = optim.AdamW(
+            model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
+        )
+        scheduler = LambdaLR(
+            optimizer, lr_lambda=cosine_lr(cfg.n_warmup, cfg.max_steps)
+        )
+
+        self.model, self.dataloader, self.optimizer, self.scheduler = (
+            self.accel.prepare(model, dataloader, optimizer, scheduler)
+        )
+
+        self.net = self.accel.unwrap_model(self.model)
+        self.ema = EMA(self.net, cfg.ema_decay) if cfg.ema_decay > 0 else None
+        self.encoder = Encoder(data.encoder).to(self.device)
+
+        if cfg.compile:
+            self.model = torch.compile(self.model)
+
+        os.makedirs(cfg.output_dir, exist_ok=True)
+
+    def restore(
+        self, resume: str | None = None, stats: str | None = None
+    ) -> dict | None:
+        if resume:
+            state = torch.load(resume, map_location="cpu", weights_only=True)
+            if "model" in state:
+                self.net.load_state_dict(state["model"])
+                self.optimizer.load_state_dict(state["optimizer"])
+                self.scheduler.load_state_dict(state["scheduler"])
+                if self.ema is not None and "ema" in state:
+                    self.ema.load_state_dict(state["ema"])
+                if "stats" in state:
+                    self.encoder.load_stats(state["stats"])
+                self.step = state["step"]
+            else:
+                self.net.load_state_dict(state)
+            self.accel.print(f"resumed from {resume} at step {self.step}")
+
+            return state
+
+        if stats:
+            state = torch.load(stats, map_location="cpu", weights_only=True)
+            if "stats" not in state:
+                raise ValueError(f"{stats} holds no encoder statistics")
+            self.encoder.load_stats(state["stats"])
+            self.accel.print(f"took encoder statistics from {stats}")
+
+        return None
+
+    def fit_stats(self) -> None:
+        if bool(self.encoder.pixel_fitted):
+            return
+
+        self.encoder.fit_stats(self.dataloader, self.data.n_stat_batches)
+        pixel = [round(v, 4) for v in self.encoder.pixel_mean.flatten().tolist()]
+        self.accel.print(
+            f"pixel mean {pixel} latent std {self.encoder.latent_std.mean():.4f}"
+        )
+
+    def averaged(self):
+        if self.ema is None:
+            return contextlib.nullcontext()
+
+        return self.ema.averaged(self.net)
+
+    def sample_dir(self) -> str:
+        path = os.path.join(self.cfg.output_dir, "samples")
+        os.makedirs(path, exist_ok=True)
+
+        return path
+
+    def tracker(self):
+        if not self.cfg.wandb_project:
+            return None
+
+        with contextlib.suppress(Exception):
+            return self.accel.get_tracker("wandb", unwrap=True)
+
+        return None
+
+    def save_checkpoint(self, extra: dict | None = None) -> None:
+        self.accel.wait_for_everyone()
+        if not self.accel.is_main_process:
+            return
+
+        state = {
+            "step": self.step,
+            "model": self.net.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "scheduler": self.scheduler.state_dict(),
+            "stats": self.encoder.stats_dict(),
+        }
+        if self.ema is not None:
+            state["ema"] = self.ema.state_dict()
+        if extra is not None:
+            state.update(extra)
+
+        self.accel.save(
+            state, os.path.join(self.cfg.output_dir, f"checkpoint_{self.step:08d}.pt")
+        )
+
+    def save_final(self, name: str) -> None:
+        self.accel.wait_for_everyone()
+        if not self.accel.is_main_process:
+            return
+
+        weights = (
+            self.ema.weights(self.net)
+            if self.ema is not None
+            else self.net.state_dict()
+        )
+
+        self.accel.save(
+            {"model": weights, "stats": self.encoder.stats_dict()},
+            os.path.join(self.cfg.output_dir, name),
+        )
+
+    def run(self, step_fn, sample_fn=None, checkpoint_extra=None) -> None:
+        cfg = self.cfg
+
+        pbar = tqdm(
+            total=cfg.max_steps,
+            initial=self.step,
+            desc="step",
+            disable=not self.accel.is_local_main_process,
+        )
+
+        while self.step < cfg.max_steps:
+            self.model.train()
+            self.dataset.set_epoch(self.epoch)
+            total, seen = 0.0, 0
+
+            for batch in self.dataloader:
+                self.optimizer.zero_grad()
+                loss, extra = step_fn(batch)
+                self.accel.backward(loss)
+
+                grad_norm = None
+                if cfg.max_grad_norm > 0 and self.accel.sync_gradients:
+                    grad_norm = self.accel.clip_grad_norm_(
+                        self.model.parameters(), cfg.max_grad_norm
+                    ).item()
+
+                self.optimizer.step()
+                self.scheduler.step()
+
+                if self.ema is not None:
+                    self.ema.update(self.net)
+
+                value = loss.item()
+                lr = self.scheduler.get_last_lr()[0]
+                total += value
+                seen += 1
+                self.step += 1
+                pbar.update(1)
+
+                postfix = {"loss": f"{value:.4f}", "avg": f"{total / seen:.4f}"}
+                postfix.update({key: f"{v:.4f}" for key, v in extra.items()})
+                postfix["lr"] = f"{lr:.2e}"
+                if grad_norm is not None:
+                    postfix["gn"] = f"{grad_norm:.2f}"
+                pbar.set_postfix(postfix, refresh=False)
+
+                if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
+                    metrics = {"loss": value, **extra, "lr": lr, "epoch": self.epoch}
+                    if grad_norm is not None:
+                        metrics["grad_norm"] = grad_norm
+                    self.accel.log(metrics, step=self.step)
+
+                if cfg.save_interval > 0 and self.step % cfg.save_interval == 0:
+                    self.save_checkpoint(
+                        checkpoint_extra() if checkpoint_extra is not None else None
+                    )
+
+                if (
+                    sample_fn is not None
+                    and cfg.sample_interval > 0
+                    and self.step % cfg.sample_interval == 0
+                ):
+                    sample_fn()
+
+                if self.step >= cfg.max_steps:
+                    break
+
+            self.accel.log({"epoch_loss": total / max(seen, 1)}, step=self.step)
+            self.epoch += 1
+
+        pbar.close()
+
+
+def train_denoiser(
+    model: DiT,
+    cfg: DiffuserTrainConfig,
+    data: DataConfig,
+    diffuser: DiffuserConfig | None = None,
+    decoder: DecoderConfig | None = None,
+    resume: str | None = None,
+):
     tokenizer = CLIPTokenizerFast.from_pretrained(data.clip)
 
-    dataset = Stream(data, seed=cfg.seed)
-    dataloader = DataLoader(
-        dataset,
-        batch_size=cfg.batch_size,
-        num_workers=cfg.num_workers,
-        drop_last=True,
-        collate_fn=functools.partial(
-            collate, tokenizer=tokenizer, max_tokens=data.max_tokens
-        ),
+    runner = _Runner(
+        model,
+        cfg,
+        data,
+        functools.partial(collate, tokenizer=tokenizer, max_tokens=data.max_tokens),
+        "denoiser",
     )
-
-    def lr_lambda(step: int) -> float:
-        if step < cfg.n_warmup:
-            return (step + 1) / max(cfg.n_warmup, 1)
-        progress = (step - cfg.n_warmup) / max(cfg.max_steps - cfg.n_warmup, 1)
-        return 0.5 * (1.0 + math.cos(math.pi * min(progress, 1.0)))
-
-    optimizer = optim.AdamW(
-        model.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay
-    )
-    scheduler = LambdaLR(optimizer, lr_lambda=lr_lambda)
-
-    model, dataloader, optimizer, scheduler = accel.prepare(
-        model, dataloader, optimizer, scheduler
-    )
+    accel, device = runner.accel, runner.device
 
     text_encoder = (
         CLIPTextModel.from_pretrained(data.clip).to(device).eval().requires_grad_(False)
     )
-    encoder = Encoder(data.encoder).to(device)
 
-    net = accel.unwrap_model(model)
-    ema = EMA(net, cfg.ema_decay) if cfg.ema_decay > 0 else None
+    runner.restore(resume=resume)
+    runner.fit_stats()
 
-    if cfg.compile:
-        model = torch.compile(model)
+    def step_fn(batch):
+        pixels, input_ids, attention_mask = batch
 
-    os.makedirs(cfg.output_dir, exist_ok=True)
+        with torch.no_grad():
+            x = runner.encoder.encode(pixels)
+            c = text_encoder(
+                input_ids=input_ids, attention_mask=attention_mask
+            ).last_hidden_state
 
-    start_step = 0
-    if resume:
-        state = torch.load(resume, map_location="cpu", weights_only=True)
-        if "model" in state:
-            net.load_state_dict(state["model"])
-            optimizer.load_state_dict(state["optimizer"])
-            scheduler.load_state_dict(state["scheduler"])
-            if ema is not None and "ema" in state:
-                ema.load_state_dict(state["ema"])
-            if "stats" in state:
-                encoder.load_stats(state["stats"])
-            start_step = state["step"]
-        else:
-            net.load_state_dict(state)
-        accel.print(f"resumed from {resume} at step {start_step}")
-
-    if not bool(encoder.pixel_fitted):
-        encoder.fit_stats(dataloader, data.n_stat_batches)
-        pixel = [round(v, 4) for v in encoder.pixel_mean.flatten().tolist()]
-        accel.print(f"pixel mean {pixel} latent std {encoder.latent_std.mean():.4f}")
-
-    def step(x: torch.Tensor, c: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         def adaptive_l2(error: torch.Tensor) -> torch.Tensor:
             d = error.float().pow(2).flatten(1).mean(-1)
             w = (d.detach() + 1e-3).pow(-0.5)
@@ -172,55 +373,26 @@ def train(
         v = eps - x
 
         u, dudt = torch.func.jvp(  # ty: ignore
-            lambda z, r, t: model(z, c, r, t, drop, mask),
+            lambda z, r, t: runner.model(z, c, r, t, drop, attention_mask),
             (z, r, t),
             (v, torch.zeros_like(r), torch.ones_like(t)),
         )
 
         tgt = (v - (tb - rb) * dudt).detach()
 
-        return adaptive_l2(u - tgt)
+        return adaptive_l2(u - tgt), {}
 
     sampler = None
 
     can_sample = (
-        cfg.sample_interval > 0
-        and bool(cfg.sample_prompts)
+        bool(cfg.sample_prompts)
         and diffuser is not None
-        and bool(diffuser.decoder_path)
+        and decoder is not None
+        and bool(decoder.path)
     )
 
     if cfg.sample_interval > 0 and not can_sample:
-        accel.print("sampling disabled: set diffuser.decoder_path to decode latents")
-
-    global_step = start_step
-    epoch = 0
-
-    pbar = tqdm(
-        total=cfg.max_steps,
-        initial=global_step,
-        desc="step",
-        disable=not accel.is_local_main_process,
-    )
-
-    def save_checkpoint() -> None:
-        accel.wait_for_everyone()
-        if not accel.is_main_process:
-            return
-
-        state = {
-            "step": global_step,
-            "model": net.state_dict(),
-            "optimizer": optimizer.state_dict(),
-            "scheduler": scheduler.state_dict(),
-            "stats": encoder.stats_dict(),
-        }
-        if ema is not None:
-            state["ema"] = ema.state_dict()
-
-        accel.save(
-            state, os.path.join(cfg.output_dir, f"checkpoint_{global_step:08d}.pt")
-        )
+        accel.print("sampling disabled: set decoder.path to decode latents")
 
     def log_samples() -> None:
         nonlocal sampler
@@ -231,13 +403,16 @@ def train(
 
         if sampler is None:
             sampler = Diffuser(
-                diffuser, device=device, dit=net, stats=encoder.stats_dict()
+                diffuser,
+                decoder,
+                device=device,
+                dit=runner.net,
+                stats=runner.encoder.stats_dict(),
             )
 
-        out_dir = os.path.join(cfg.output_dir, "samples")
-        os.makedirs(out_dir, exist_ok=True)
+        out_dir = runner.sample_dir()
 
-        with ema.averaged(net) if ema is not None else contextlib.nullcontext():
+        with runner.averaged():
             images = [
                 sampler.generate(
                     prompt,
@@ -250,15 +425,11 @@ def train(
 
         paths = []
         for i, image in enumerate(images):
-            path = os.path.join(out_dir, f"step_{global_step:08d}_{i:02d}.png")
+            path = os.path.join(out_dir, f"step_{runner.step:08d}_{i:02d}.png")
             save_image(image.float(), path)
             paths.append(path)
 
-        tracker = None
-        if cfg.wandb_project:
-            with contextlib.suppress(Exception):
-                tracker = accel.get_tracker("wandb", unwrap=True)
-
+        tracker = runner.tracker()
         if tracker is not None:
             tracker.log(
                 {
@@ -267,80 +438,140 @@ def train(
                         for path, prompt in zip(paths, cfg.sample_prompts)
                     ]
                 },
-                step=global_step,
+                step=runner.step,
             )
 
-    while global_step < cfg.max_steps:
-        model.train()
-        dataset.set_epoch(epoch)
-        total, seen = 0.0, 0
+    runner.run(step_fn, log_samples if can_sample else None)
+    runner.save_final("model.pt")
 
-        for pixels, input_ids, attention_mask in dataloader:
-            with torch.no_grad():
-                latent = encoder.encode(pixels)
-                emb = text_encoder(
-                    input_ids=input_ids, attention_mask=attention_mask
-                ).last_hidden_state
+    accel.end_training()
 
-            optimizer.zero_grad()
-            loss = step(latent, emb, attention_mask)
-            accel.backward(loss)
 
-            grad_norm = None
-            if cfg.max_grad_norm > 0 and accel.sync_gradients:
-                grad_norm = accel.clip_grad_norm_(
-                    model.parameters(), cfg.max_grad_norm
-                ).item()
+def train_decoder(
+    decoder: Decoder,
+    cfg: DecoderTrainConfig,
+    data: DataConfig,
+    resume: str | None = None,
+    stats: str | None = None,
+):
+    runner = _Runner(decoder, cfg, data, collate_pixels, "decoder")
+    accel, device = runner.accel, runner.device
 
-            optimizer.step()
-            scheduler.step()
+    perceptual = (
+        lpips.LPIPS(net=cfg.lpips_net).to(device).eval().requires_grad_(False)
+        if cfg.lpips_weight > 0
+        else None
+    )
 
-            if ema is not None:
-                ema.update(net)
-
-            value = loss.item()
-            lr = scheduler.get_last_lr()[0]
-            total += value
-            seen += 1
-            global_step += 1
-            pbar.update(1)
-
-            postfix = {
-                "loss": f"{value:.4f}",
-                "avg": f"{total / seen:.4f}",
-                "lr": f"{lr:.2e}",
-            }
-            if grad_norm is not None:
-                postfix["gn"] = f"{grad_norm:.2f}"
-            pbar.set_postfix(postfix, refresh=False)
-
-            if cfg.log_interval > 0 and global_step % cfg.log_interval == 0:
-                metrics = {"loss": value, "lr": lr, "epoch": epoch}
-                if grad_norm is not None:
-                    metrics["grad_norm"] = grad_norm
-                accel.log(metrics, step=global_step)
-
-            if cfg.save_interval > 0 and global_step % cfg.save_interval == 0:
-                save_checkpoint()
-
-            if can_sample and global_step % cfg.sample_interval == 0:
-                log_samples()
-
-            if global_step >= cfg.max_steps:
-                break
-
-        accel.log({"epoch_loss": total / max(seen, 1)}, step=global_step)
-        epoch += 1
-
-    pbar.close()
-
-    accel.wait_for_everyone()
-
-    if accel.is_main_process:
-        weights = ema.weights(net) if ema is not None else net.state_dict()
-        accel.save(
-            {"model": weights, "stats": encoder.stats_dict()},
-            os.path.join(cfg.output_dir, "model.pt"),
+    if cfg.gan_backbone not in ("dino", "pixel"):
+        raise ValueError(
+            f"unknown gan_backbone {cfg.gan_backbone!r}, expected 'dino' or 'pixel'"
         )
+
+    latent_gan = cfg.gan_backbone == "dino"
+
+    disc = disc_opt = disc_sched = None
+    if cfg.gan_weight > 0:
+        disc = (
+            LatentDiscriminator(
+                runner.encoder.d_latent, cfg.gan_channels, cfg.gan_layers
+            )
+            if latent_gan
+            else PixelDiscriminator(cfg.gan_channels, cfg.gan_layers)
+        )
+        disc_opt = optim.AdamW(disc.parameters(), lr=cfg.gan_lr, betas=(0.5, 0.9))
+        disc_sched = LambdaLR(
+            disc_opt,
+            lr_lambda=cosine_lr(cfg.n_warmup, max(cfg.max_steps - cfg.gan_start, 1)),
+        )
+        disc, disc_opt, disc_sched = accel.prepare(disc, disc_opt, disc_sched)
+
+    state = runner.restore(resume=resume, stats=stats)
+    if state is not None and disc is not None and "disc" in state:
+        accel.unwrap_model(disc).load_state_dict(state["disc"])
+        disc_opt.load_state_dict(state["disc_optimizer"])
+        disc_sched.load_state_dict(state["disc_scheduler"])
+
+    runner.fit_stats()
+
+    preview = None
+
+    def step_fn(batch):
+        nonlocal preview
+
+        (pixels,) = batch
+        if preview is None:
+            preview = pixels[: cfg.n_samples].clone()
+
+        with torch.no_grad():
+            latent = runner.encoder.encode(pixels, normalize=False)
+
+        recon = runner.model(latent)
+
+        l1 = (recon - pixels).abs().mean()
+        loss = cfg.l1_weight * l1
+        metrics = {"l1": l1.item()}
+
+        if perceptual is not None:
+            perc = perceptual(2.0 * recon - 1.0, 2.0 * pixels - 1.0).mean()
+            loss = loss + cfg.lpips_weight * perc
+            metrics["lpips"] = perc.item()
+
+        if disc is not None and runner.step >= cfg.gan_start:
+            if latent_gan:
+                truth = runner.encoder.normalize(latent)
+                forged = runner.encoder.features(recon)
+            else:
+                truth, forged = pixels, recon
+
+            disc_opt.zero_grad()
+            real = F.relu(1.0 - disc(truth)).mean()
+            fake = F.relu(1.0 + disc(forged.detach())).mean()
+            d_loss = 0.5 * (real + fake)
+            accel.backward(d_loss)
+            disc_opt.step()
+            disc_sched.step()
+
+            adv = -disc(forged).mean()
+            loss = loss + cfg.gan_weight * adv
+            metrics["adv"] = adv.item()
+            metrics["disc"] = d_loss.item()
+
+        return loss, metrics
+
+    def checkpoint_extra() -> dict | None:
+        if disc is None:
+            return None
+
+        return {
+            "disc": accel.unwrap_model(disc).state_dict(),
+            "disc_optimizer": disc_opt.state_dict(),
+            "disc_scheduler": disc_sched.state_dict(),
+        }
+
+    def log_recon() -> None:
+        accel.wait_for_everyone()
+        if not accel.is_main_process or preview is None:
+            return
+
+        with runner.averaged(), torch.no_grad():
+            recon = runner.net(runner.encoder.encode(preview, normalize=False))
+
+        grid = make_grid(
+            torch.cat([preview, recon.float().clamp(0, 1)]).cpu(),
+            nrow=preview.shape[0],
+        )
+        path = os.path.join(runner.sample_dir(), f"step_{runner.step:08d}.png")
+        save_image(grid, path)
+
+        tracker = runner.tracker()
+        if tracker is not None:
+            tracker.log(
+                {"recon": wandb.Image(path, caption="source over reconstruction")},
+                step=runner.step,
+            )
+
+    runner.run(step_fn, log_recon, checkpoint_extra)
+    runner.save_final("decoder.pt")
 
     accel.end_training()

@@ -2,8 +2,9 @@ import torch
 from torch import nn
 from transformers import CLIPTextModel, CLIPTokenizerFast
 
-from ..configs import DiffuserConfig
+from ..configs import DecoderConfig, DiffuserConfig
 from .components import CaptionProj, DiTBlock, FinalBlock, ImgEmbed, TimeEmbed, Unembed
+from .latents import Decoder
 
 
 class DiT(nn.Module):
@@ -76,6 +77,7 @@ class Diffuser:
     def __init__(
         self,
         cfg: DiffuserConfig,
+        decoder: DecoderConfig | None = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         dit: DiT | None = None,
         model_path: str = "",
@@ -88,16 +90,7 @@ class Diffuser:
         self.clip = CLIPTextModel.from_pretrained(cfg.clip).to(self.device).eval()
         self.tokenizer = CLIPTokenizerFast.from_pretrained(cfg.clip)
 
-        self.decoder = None
-        if cfg.decoder_path:
-            self.decoder = (
-                torch.load(
-                    cfg.decoder_path, map_location=self.device, weights_only=False
-                )
-                .to(self.device)
-                .eval()
-            )
-
+        self.stats = None
         self.latent_mean, self.latent_std = None, None
         if stats is not None:
             self.load_stats(stats)
@@ -105,7 +98,44 @@ class Diffuser:
         if dit is None and model_path:
             self.load_denoiser(model_path)
 
+        self.decoder = None
+        if decoder is not None and decoder.path:
+            self.decoder = (
+                Decoder(decoder, cfg.img_size)
+                .to(self.device)
+                .eval()
+                .requires_grad_(False)
+            )
+            self.load_decoder(decoder.path)
+
+    def load_decoder(self, path: str) -> None:
+        state = torch.load(path, map_location=self.device, weights_only=True)
+
+        if isinstance(state, dict) and "stats" in state:
+            self.check_stats(state["stats"], path)
+
+        for key in ("ema", "model"):
+            if isinstance(state, dict) and key in state:
+                state = state[key]
+                break
+
+        self.decoder.load_state_dict(state)
+
+    def check_stats(self, stats: dict, path: str) -> None:
+        if self.stats is None:
+            return
+
+        for key in ("pixel_mean", "pixel_std"):
+            a, b = self.stats[key].cpu(), stats[key].cpu()
+            if not torch.allclose(a, b, atol=1e-3):
+                print(
+                    f"warning: {path} was trained with {key} {b.flatten().tolist()} "
+                    f"but the denoiser expects {a.flatten().tolist()}; "
+                    "the two saw different encoders"
+                )
+
     def load_stats(self, stats: dict) -> None:
+        self.stats = stats
         self.latent_mean = stats["latent_mean"].to(self.device)
         self.latent_std = stats["latent_std"].to(self.device)
 
@@ -113,7 +143,7 @@ class Diffuser:
         if self.decoder is None:
             raise RuntimeError(
                 "no decoder: diffusion runs in DINO latent space, so pixels require "
-                "a trained decoder at diffuser.decoder_path"
+                "a trained decoder at decoder.path"
             )
 
         if self.latent_std is not None:
@@ -188,7 +218,7 @@ class Diffuser:
 
             x = x + (t_next - t_now) * pred
 
-        output = (self.decode(x) + 1) / 2
+        output = self.decode(x)
 
         if was_training:
             self.dit.train()
