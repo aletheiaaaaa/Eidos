@@ -15,7 +15,7 @@ train:
   p_ratio: 0.25
   p_uncond: 0.1
   n_warmup: 5
-  n_epochs: 200
+  n_epochs: 50
   batch_size: 128
   num_workers: 0
   seed: 0
@@ -26,9 +26,13 @@ train:
   mixed_precision: bf16
   log_interval: 50
   wandb_project: "lumina"
-  save_interval: 50
-  sample_interval: 0
-  sample_prompts: []
+  save_interval: 5
+  sample_interval: 2
+  sample_prompts:
+    - "a lighthouse at dusk"
+    - "an oil painting of a harbour at sunrise"
+    - "a watercolour portrait of a young woman"
+    - "a snow-covered pine forest under an aurora"
   sample_steps: 2
   sample_guidance: 3.0
   output_dir: ./checkpoints
