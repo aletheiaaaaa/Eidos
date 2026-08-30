@@ -45,20 +45,16 @@ def process_data(cfg: DataConfig) -> None:
     shard_ctr = 0
     count = 0
 
-    def write(save_dir: str, shard_idx: int, latents: list, embeddings: list) -> None:
-        shard_file = os.path.join(save_dir, f"shard_{shard_idx:05d}.h5")
-        with h5py.File(shard_file, "w") as h5f:
-            h5f.create_dataset("latents", data=torch.cat(latents, dim=0).numpy())
-            h5f.create_dataset("embeddings", data=torch.cat(embeddings, dim=0).numpy())
+    def process_batch(is_final: bool = False) -> None:
+        nonlocal shard_ctr, count
 
-    def encode(images, captions, vae, clip, processor, transform):
         pixels, texts = [], []
         for img, text in zip(images, captions):
             pixels.append(transform(img.convert("RGB")))
             texts.append(first_sentence(text))
 
-        if not pixels:
-            return None, None
+        if not len(pixels):
+            return
 
         pixels = torch.stack(pixels).to(device)
 
@@ -72,23 +68,25 @@ def process_data(cfg: DataConfig) -> None:
             ).to(device)
             embeds = clip.get_text_features(**inputs).pooler_output
 
-        return latents.cpu(), embeds.cpu()
+        latents = latents.cpu()
+        embeds = embeds.cpu()
 
-    def drain(is_final: bool = False) -> None:
-        nonlocal shard_ctr, count
+        images.clear()
+        captions.clear()
 
-        if images:
-            latents, embeds = encode(images, captions, vae, clip, processor, transform)
-            images.clear()
-            captions.clear()
-
-            if latents is not None:
-                all_latents.append(latents)
-                all_embeddings.append(embeds)
-                count += latents.size(0)
+        all_latents.append(latents)
+        all_embeddings.append(embeds)
+        count += latents.size(0)
 
         if all_latents and (is_final or count >= cfg.samples_per_shard):
-            write(cfg.save_dir, shard_ctr, all_latents, all_embeddings)
+            shard_file = os.path.join(cfg.save_dir, f"shard_{shard_ctr:05d}.h5")
+            with h5py.File(shard_file, "w") as h5f:
+                h5f.create_dataset(
+                    "latents", data=torch.cat(all_latents, dim=0).numpy()
+                )
+                h5f.create_dataset(
+                    "embeddings", data=torch.cat(all_embeddings, dim=0).numpy()
+                )
 
             shard_ctr += 1
             count = 0
@@ -103,9 +101,9 @@ def process_data(cfg: DataConfig) -> None:
         progress.update(1)
 
         if len(images) >= cfg.encode_batch_size:
-            drain()
+            process_batch()
 
-    drain(True)
+    process_batch(True)
 
     progress.close()
 
