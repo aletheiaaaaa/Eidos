@@ -33,7 +33,7 @@ diffuser:
     n_warmup: 1000
     max_steps: 200000
     batch_size: 128
-    num_workers: 8
+    num_workers: 1
     seed: 0
     lr: 1.0e-4
     weight_decay: 1.0e-2
@@ -67,7 +67,7 @@ decoder:
     n_warmup: 1000
     max_steps: 100000
     batch_size: 32
-    num_workers: 8
+    num_workers: 1
     seed: 0
     lr: 1.0e-4
     weight_decay: 1.0e-2
