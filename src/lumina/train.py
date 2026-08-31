@@ -22,6 +22,7 @@ from .configs import (
     DecoderTrainConfig,
     DiffuserConfig,
     DiffuserTrainConfig,
+    latest_checkpoint,
 )
 from .data import Stream, collate, collate_pixels
 from .nn.latents import Decoder, Encoder, LatentDiscriminator, PixelDiscriminator
@@ -388,11 +389,14 @@ def train_denoiser(
         bool(cfg.sample_prompts)
         and diffuser is not None
         and decoder is not None
-        and bool(decoder.path)
+        and bool(latest_checkpoint(decoder.train.output_dir, "decoder.pt"))
     )
 
     if cfg.sample_interval > 0 and not can_sample:
-        accel.print("sampling disabled: set decoder.path to decode latents")
+        accel.print(
+            "sampling disabled: no decoder in "
+            f"{decoder.train.output_dir if decoder is not None else 'decoder.train'}"
+        )
 
     def log_samples() -> None:
         nonlocal sampler

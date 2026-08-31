@@ -21,10 +21,6 @@ Every key in `config.yaml` is optional and falls back to `src/lumina/configs.py`
 
 To use a different config, make use of the `--config` kewyord argument.
 
-### Decoder
-
-**Set `decoder.path` to the output of `train-decoder` to enable `lumina generate` and sampling while training**
-
 ## Guidance
 
 To use classifier-free guidance, use the `-g` or `--guidance` flag

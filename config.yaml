@@ -55,7 +55,6 @@ diffuser:
     output_dir: ./checkpoints
 
 decoder:
-  path: ""
   resolution: 256
   d_latent: 768
   d_model: 768

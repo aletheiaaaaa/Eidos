@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from transformers import CLIPTextModel, CLIPTokenizerFast
 
-from ..configs import DecoderConfig, DiffuserConfig
+from ..configs import DecoderConfig, DiffuserConfig, latest_checkpoint
 from .components import CaptionProj, DiTBlock, FinalBlock, ImgEmbed, TimeEmbed, Unembed
 from .latents import Decoder
 
@@ -99,14 +99,19 @@ class Diffuser:
             self.load_denoiser(model_path)
 
         self.decoder = None
-        if decoder is not None and decoder.path:
+        weights = (
+            latest_checkpoint(decoder.train.output_dir, "decoder.pt")
+            if decoder is not None
+            else ""
+        )
+        if weights:
             self.decoder = (
                 Decoder(decoder, cfg.img_size)
                 .to(self.device)
                 .eval()
                 .requires_grad_(False)
             )
-            self.load_decoder(decoder.path)
+            self.load_decoder(weights)
 
     def load_decoder(self, path: str) -> None:
         state = torch.load(path, map_location=self.device, weights_only=True)
@@ -143,7 +148,7 @@ class Diffuser:
         if self.decoder is None:
             raise RuntimeError(
                 "no decoder: diffusion runs in DINO latent space, so pixels require "
-                "a trained decoder at decoder.path"
+                "a trained decoder in decoder.train.output_dir"
             )
 
         if self.latent_std is not None:

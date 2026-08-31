@@ -1,19 +1,9 @@
 import argparse
 from pathlib import Path
 
-from .configs import Config, load_config
+from .configs import Config, latest_checkpoint, load_config
 
 DEFAULT_CONFIG = "config.yaml"
-
-
-def _latest_checkpoint(output_dir: str, name: str = "model.pt") -> str:
-    final = Path(output_dir) / name
-    if final.exists():
-        return str(final)
-
-    checkpoints = sorted(Path(output_dir).glob("checkpoint_*.pt"))
-
-    return str(checkpoints[-1]) if checkpoints else ""
 
 
 def _cmd_train_denoiser(cfg: Config, args: argparse.Namespace) -> None:
@@ -38,7 +28,7 @@ def _cmd_train_decoder(cfg: Config, args: argparse.Namespace) -> None:
 
     decoder = Decoder(cfg.decoder, cfg.diffuser.img_size)
 
-    stats = args.stats or _latest_checkpoint(cfg.diffuser.train.output_dir)
+    stats = args.stats or latest_checkpoint(cfg.diffuser.train.output_dir)
 
     train_decoder(
         decoder,
@@ -57,7 +47,7 @@ def _cmd_generate(cfg: Config, args: argparse.Namespace) -> None:
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-    path = args.checkpoint or _latest_checkpoint(cfg.diffuser.train.output_dir)
+    path = args.checkpoint or latest_checkpoint(cfg.diffuser.train.output_dir)
     if not path:
         raise SystemExit(
             f"no denoiser weights in {cfg.diffuser.train.output_dir}; pass --checkpoint"

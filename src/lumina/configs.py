@@ -73,7 +73,6 @@ class DecoderTrainConfig:
 
 @dataclass
 class DecoderConfig:
-    path: str = ""
     resolution: int = 256
     d_latent: int = 768
     d_model: int = 768
@@ -117,6 +116,16 @@ class Config:
     data: DataConfig = field(default_factory=DataConfig)
     diffuser: DiffuserConfig = field(default_factory=DiffuserConfig)
     decoder: DecoderConfig = field(default_factory=DecoderConfig)
+
+
+def latest_checkpoint(output_dir: str, name: str = "model.pt") -> str:
+    final = Path(output_dir) / name
+    if final.exists():
+        return str(final)
+
+    checkpoints = sorted(Path(output_dir).glob("checkpoint_*.pt"))
+
+    return str(checkpoints[-1]) if checkpoints else ""
 
 
 def _build(cls: type, raw: Any, path: str) -> Any:
