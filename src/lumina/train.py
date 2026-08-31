@@ -1,8 +1,11 @@
 import contextlib
 import dataclasses
+import faulthandler
 import functools
 import math
 import os
+import signal
+import time
 
 import lpips
 import torch
@@ -114,6 +117,9 @@ class _Runner:
                 },
             )
 
+        if hasattr(signal, "SIGUSR1"):
+            faulthandler.register(signal.SIGUSR1, all_threads=True)
+
         self.dataset = Stream(data, seed=cfg.seed)
         dataloader = DataLoader(
             self.dataset,
@@ -176,10 +182,17 @@ class _Runner:
         if bool(self.encoder.pixel_fitted):
             return
 
+        self.accel.print(
+            f"fitting encoder statistics over {self.data.n_stat_batches} batches "
+            f"(shuffle buffer {self.data.shuffle_buffer}, "
+            f"{self.cfg.num_workers} workers)"
+        )
+        start = time.perf_counter()
         self.encoder.fit_stats(self.dataloader, self.data.n_stat_batches)
         pixel = [round(v, 4) for v in self.encoder.pixel_mean.flatten().tolist()]
         self.accel.print(
-            f"pixel mean {pixel} latent std {self.encoder.latent_std.mean():.4f}"
+            f"pixel mean {pixel} latent std {self.encoder.latent_std.mean():.4f} "
+            f"in {time.perf_counter() - start:.1f}s"
         )
 
     def averaged(self):
@@ -250,12 +263,24 @@ class _Runner:
             disable=not self.accel.is_local_main_process,
         )
 
+        self.accel.print(
+            f"entering training loop (compile={cfg.compile}); "
+            "send SIGUSR1 to dump stacks if it stalls"
+        )
+        entered = time.perf_counter()
+        fetched = None
+        timed = False
+
         while self.step < cfg.max_steps:
             self.model.train()
             self.dataset.set_epoch(self.epoch)
             total, seen = 0.0, 0
 
             for batch in self.dataloader:
+                if fetched is None:
+                    fetched = time.perf_counter()
+                    self.accel.print(f"first batch in {fetched - entered:.1f}s")
+
                 self.optimizer.zero_grad()
                 loss, extra = step_fn(batch)
                 self.accel.backward(loss)
@@ -271,6 +296,12 @@ class _Runner:
 
                 if self.ema is not None:
                     self.ema.update(self.net)
+
+                if not timed:
+                    timed = True
+                    self.accel.print(
+                        f"first step in {time.perf_counter() - fetched:.1f}s"
+                    )
 
                 value = loss.item()
                 lr = self.scheduler.get_last_lr()[0]

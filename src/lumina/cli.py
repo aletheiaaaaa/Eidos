@@ -79,6 +79,64 @@ def _cmd_config(cfg: Config, args: argparse.Namespace) -> None:
     print(json.dumps(dataclasses.asdict(cfg), indent=2))
 
 
+def _cmd_bench_data(cfg: Config, args: argparse.Namespace) -> None:
+    import time
+
+    from datasets import load_dataset
+    from torch.utils.data import DataLoader
+
+    from .data import Stream, collate_pixels
+
+    data = cfg.data
+
+    start = time.perf_counter()
+    raw = load_dataset(data.dataset, split=data.split, streaming=True)
+    print(
+        f"resolved {data.dataset}:{data.split} in "
+        f"{time.perf_counter() - start:.1f}s, num_shards={raw.num_shards}"
+    )
+    if raw.num_shards < args.workers:
+        print(
+            f"warning: num_shards={raw.num_shards} < workers={args.workers}; "
+            f"{args.workers - raw.num_shards} workers will sit idle"
+        )
+
+    stream = iter(raw)
+    start = time.perf_counter()
+    next(stream)
+    print(f"first raw example in {time.perf_counter() - start:.1f}s")
+
+    start = time.perf_counter()
+    for _ in range(args.num_examples):
+        next(stream)
+    elapsed = time.perf_counter() - start
+    print(
+        f"{args.num_examples} raw examples in {elapsed:.1f}s "
+        f"({args.num_examples / elapsed:.1f}/s)"
+    )
+
+    start = time.perf_counter()
+    next(iter(raw.shuffle(seed=0, buffer_size=data.shuffle_buffer)))
+    print(
+        f"first shuffled example (buffer {data.shuffle_buffer}) in "
+        f"{time.perf_counter() - start:.1f}s"
+    )
+
+    loader = DataLoader(
+        Stream(data),
+        batch_size=args.batch_size,
+        num_workers=args.workers,
+        drop_last=True,
+        collate_fn=collate_pixels,
+    )
+    start = time.perf_counter()
+    pixels = next(iter(loader))[0]
+    print(
+        f"first batch of {args.batch_size} via {args.workers} workers in "
+        f"{time.perf_counter() - start:.1f}s {tuple(pixels.shape)}"
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lumina", description="Train and sample the Lumina latent diffusion model."
@@ -132,6 +190,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_cfg = sub.add_parser("config", help="print the resolved config and exit")
     p_cfg.set_defaults(func=_cmd_config)
+
+    p_bench = sub.add_parser(
+        "bench-data", help="time the streaming pipeline stage by stage"
+    )
+    p_bench.add_argument("-n", "--num-examples", type=int, default=200)
+    p_bench.add_argument("-b", "--batch-size", type=int, default=32)
+    p_bench.add_argument("-w", "--workers", type=int, default=8)
+    p_bench.set_defaults(func=_cmd_bench_data)
 
     return parser
 
