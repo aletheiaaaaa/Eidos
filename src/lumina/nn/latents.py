@@ -3,6 +3,7 @@ import math
 import einops
 import torch
 from torch import nn
+from tqdm import tqdm
 from transformers import AutoModel
 
 from ..configs import DecoderConfig
@@ -14,7 +15,7 @@ def _moments(chunks, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
     total_sq = torch.zeros(dim)
     count = 0
 
-    for flat in chunks:
+    for flat in tqdm(chunks):
         total += flat.sum(1)
         total_sq += flat.pow(2).sum(1)
         count += flat.shape[1]
