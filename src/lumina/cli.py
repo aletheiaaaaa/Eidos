@@ -7,8 +7,12 @@ DEFAULT_CONFIG = "config.yaml"
 
 
 def _cmd_train_denoiser(cfg: Config, args: argparse.Namespace) -> None:
+    from accelerate.utils import set_seed
+
     from .nn.model import DiT
     from .train import train_denoiser
+
+    set_seed(cfg.diffuser.train.seed)
 
     model = DiT(cfg.diffuser)
 
@@ -23,8 +27,12 @@ def _cmd_train_denoiser(cfg: Config, args: argparse.Namespace) -> None:
 
 
 def _cmd_train_decoder(cfg: Config, args: argparse.Namespace) -> None:
+    from accelerate.utils import set_seed
+
     from .nn.latents import Decoder
     from .train import train_decoder
+
+    set_seed(cfg.decoder.train.seed)
 
     decoder = Decoder(cfg.decoder, cfg.diffuser.img_size)
 

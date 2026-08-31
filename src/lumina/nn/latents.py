@@ -180,7 +180,7 @@ class Decoder(nn.Module):
         return self.unembed(self.ln(x))
 
 
-class LatentDiscriminator(nn.Module):
+class Discriminator(nn.Module):
     def __init__(self, d_latent: int, n_channels: int = 64, n_layers: int = 3) -> None:
         super().__init__()
 

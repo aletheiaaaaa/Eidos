@@ -5,7 +5,6 @@ data:
   image_key: image
   label_key: label
   prompt_template: "a photo of a {}"
-  shuffle_buffer: 1000
   max_tokens: 77
   encoder: facebook/dinov3-vitb16-pretrain-lvd1689m
   n_stat_batches: 16
@@ -34,7 +33,7 @@ diffuser:
     max_steps: 200000
     batch_size: 128
     num_workers: 8
-    seed: 0
+    seed: 42
     lr: 1.0e-4
     weight_decay: 1.0e-2
     max_grad_norm: 1.0
@@ -68,7 +67,7 @@ decoder:
     max_steps: 100000
     batch_size: 32
     num_workers: 8
-    seed: 0
+    seed: 42
     lr: 1.0e-4
     weight_decay: 1.0e-2
     max_grad_norm: 1.0

@@ -25,7 +25,7 @@ from .configs import (
     latest_checkpoint,
 )
 from .data import Stream, collate, collate_pixels
-from .nn.latents import Decoder, Encoder, LatentDiscriminator, PixelDiscriminator
+from .nn.latents import Decoder, Discriminator, Encoder, PixelDiscriminator
 from .nn.model import Diffuser, DiT
 
 
@@ -114,9 +114,8 @@ class _Runner:
                 },
             )
 
-        self.dataset = Stream(data, seed=cfg.seed)
         dataloader = DataLoader(
-            self.dataset,
+            Stream(data),
             batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
             drop_last=True,
@@ -252,7 +251,6 @@ class _Runner:
 
         while self.step < cfg.max_steps:
             self.model.train()
-            self.dataset.set_epoch(self.epoch)
             total, seen = 0.0, 0
 
             for batch in self.dataloader:
@@ -477,9 +475,7 @@ def train_decoder(
     disc = disc_opt = disc_sched = None
     if cfg.gan_weight > 0:
         disc = (
-            LatentDiscriminator(
-                runner.encoder.d_latent, cfg.gan_channels, cfg.gan_layers
-            )
+            Discriminator(runner.encoder.d_latent, cfg.gan_channels, cfg.gan_layers)
             if latent_gan
             else PixelDiscriminator(cfg.gan_channels, cfg.gan_layers)
         )

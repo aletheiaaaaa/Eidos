@@ -24,7 +24,7 @@ class DiffuserTrainConfig:
     max_steps: int = 200_000
     batch_size: int = 128
     num_workers: int = 0
-    seed: int = 0
+    seed: int = 42
     lr: float = 1e-4
     weight_decay: float = 1e-2
     max_grad_norm: float = 1.0
@@ -47,7 +47,7 @@ class DecoderTrainConfig:
     max_steps: int = 100_000
     batch_size: int = 32
     num_workers: int = 8
-    seed: int = 0
+    seed: int = 42
     lr: float = 1e-4
     weight_decay: float = 1e-2
     max_grad_norm: float = 1.0
@@ -104,7 +104,6 @@ class DataConfig:
     image_key: str = "image"
     label_key: str = "label"
     prompt_template: str = "a photo of a {}"
-    shuffle_buffer: int = 1000
     max_tokens: int = 77
     encoder: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
     n_stat_batches: int = 50

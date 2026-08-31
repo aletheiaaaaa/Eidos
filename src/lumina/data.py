@@ -13,10 +13,8 @@ def class_prompt(name: str, template: str) -> str:
 
 
 class Stream(IterableDataset):
-    def __init__(self, cfg: DataConfig, seed: int = 0) -> None:
+    def __init__(self, cfg: DataConfig) -> None:
         self.cfg = cfg
-        self.seed = seed
-        self.epoch = 0
 
         self.transform = transforms.Compose(
             [
@@ -37,16 +35,8 @@ class Stream(IterableDataset):
 
         self.names = features[cfg.label_key].names
 
-    def set_epoch(self, epoch: int) -> None:
-        self.epoch = epoch
-
     def __iter__(self):
-        stream = self.stream.shuffle(
-            seed=self.seed, buffer_size=self.cfg.shuffle_buffer
-        )
-        stream.set_epoch(self.epoch)
-
-        for example in stream:
+        for example in self.stream:
             image = example[self.cfg.image_key]
             label = example[self.cfg.label_key]
 
