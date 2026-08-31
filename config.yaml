@@ -35,7 +35,7 @@ diffuser:
     p_uncond: 0.1
     n_warmup: 1000
     max_steps: 200000
-    batch_size: 16
+    batch_size: 128
     num_workers: 8
     seed: 42
     lr: 1.0e-4
@@ -69,7 +69,7 @@ decoder:
   train:
     n_warmup: 1000
     max_steps: 100000
-    batch_size: 16
+    batch_size: 128
     num_workers: 8
     seed: 42
     lr: 1.0e-4
@@ -80,7 +80,7 @@ decoder:
     lpips_weight: 1.0
     lpips_net: vgg
     gan_weight: 0.1
-    gan_start: 20000
+    gan_start: 60000
     gan_backbone: dino
     gan_lr: 2.0e-4
     gan_channels: 64
