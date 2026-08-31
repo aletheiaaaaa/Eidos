@@ -120,6 +120,11 @@ class _Runner:
             num_workers=cfg.num_workers,
             drop_last=True,
             collate_fn=collate_fn,
+            **(
+                {"prefetch_factor": 4, "persistent_workers": True}
+                if cfg.num_workers > 0
+                else {}
+            ),
         )
 
         optimizer = optim.AdamW(
