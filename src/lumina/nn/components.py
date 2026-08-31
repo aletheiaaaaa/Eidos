@@ -1,3 +1,5 @@
+import math
+
 import einops
 import torch
 from torch import nn
@@ -246,3 +248,48 @@ class Unembed(nn.Module):
         )
 
         return x
+
+
+class PixelUnembed(nn.Module):
+    def __init__(
+        self, d_model: int, n_channels: int, patch_size: int, img_size: int
+    ) -> None:
+        super().__init__()
+
+        self.grid = img_size // patch_size
+
+        n_stages = int(math.log2(patch_size))
+        if 2**n_stages != patch_size:
+            raise ValueError(f"patch size {patch_size} is not a power of two")
+
+        if d_model % 2**n_stages != 0:
+            raise ValueError(
+                f"d_model {d_model} is not divisible by {2**n_stages}, the "
+                f"channel reduction over {n_stages} upsampling stages"
+            )
+
+        layers: list[nn.Module] = []
+
+        width = d_model
+        for _ in range(n_stages):
+            half = width // 2
+            layers += [
+                nn.Conv2d(width, width * 2, 3, padding=1),
+                nn.PixelShuffle(2),
+                nn.GroupNorm(math.gcd(32, half), half),
+                nn.SiLU(),
+            ]
+            width = half
+
+        layers += [
+            nn.Conv2d(width, width, 3, padding=1),
+            nn.SiLU(),
+            nn.Conv2d(width, n_channels, 3, padding=1),
+        ]
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = einops.rearrange(x, "b (h w) c -> b c h w", h=self.grid, w=self.grid)
+
+        return self.net(x)

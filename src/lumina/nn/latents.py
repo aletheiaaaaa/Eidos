@@ -7,7 +7,7 @@ from tqdm import tqdm
 from transformers import AutoModel
 
 from ..configs import DecoderConfig
-from .components import Unembed, ViTBlock
+from .components import PixelUnembed, ViTBlock
 
 
 def _moments(chunks, dim: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -160,7 +160,7 @@ class Decoder(nn.Module):
         )
 
         self.ln = nn.LayerNorm(cfg.d_model)
-        self.unembed = Unembed(cfg.d_model, 3, self.patch_size, cfg.resolution)
+        self.unembed = PixelUnembed(cfg.d_model, 3, self.patch_size, cfg.resolution)
 
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
         if latent.shape[-1] != self.grid or latent.shape[-2] != self.grid:
