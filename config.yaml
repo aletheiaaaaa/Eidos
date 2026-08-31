@@ -38,7 +38,7 @@ diffuser:
     batch_size: 64
     num_workers: 8
     seed: 42
-    lr: 1.0e-4
+    lr: 2.0e-4
     weight_decay: 1.0e-2
     max_grad_norm: 1.0
     ema_decay: 0.9999
@@ -72,7 +72,7 @@ decoder:
     batch_size: 64
     num_workers: 8
     seed: 42
-    lr: 1.0e-4
+    lr: 2.0e-4
     weight_decay: 1.0e-2
     max_grad_norm: 1.0
     ema_decay: 0.999
