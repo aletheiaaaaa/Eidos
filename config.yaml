@@ -5,7 +5,7 @@ data:
   image_key: image
   label_key: label
   prompt_template: "a photo of a {}"
-  shuffle_buffer: 10000
+  shuffle_buffer: 1000
   max_tokens: 77
   encoder: facebook/dinov3-vitb16-pretrain-lvd1689m
   n_stat_batches: 16

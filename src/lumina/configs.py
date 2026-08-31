@@ -104,7 +104,7 @@ class DataConfig:
     image_key: str = "image"
     label_key: str = "label"
     prompt_template: str = "a photo of a {}"
-    shuffle_buffer: int = 10000
+    shuffle_buffer: int = 1000
     max_tokens: int = 77
     encoder: str = "facebook/dinov3-vitb16-pretrain-lvd1689m"
     n_stat_batches: int = 50

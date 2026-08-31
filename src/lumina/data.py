@@ -1,6 +1,6 @@
 import torch
 from datasets import load_dataset
-from torch.utils.data import IterableDataset, get_worker_info
+from torch.utils.data import IterableDataset
 from torchvision import transforms
 
 from .configs import DataConfig
@@ -44,11 +44,6 @@ class Stream(IterableDataset):
         stream = self.stream.shuffle(
             seed=self.seed, buffer_size=self.cfg.shuffle_buffer
         )
-
-        info = get_worker_info()
-        if info is not None and info.num_workers > 1:
-            stream = stream.shard(num_shards=info.num_workers, index=info.id)
-
         stream.set_epoch(self.epoch)
 
         for example in stream:
