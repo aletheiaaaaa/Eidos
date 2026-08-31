@@ -231,29 +231,6 @@ class Unembed(nn.Module):
     def __init__(
         self, d_model: int, n_channels: int, patch_size: int, img_size: int
     ) -> None:
-        super(Unembed, self).__init__()
-        self.patch_size = patch_size
-        self.img_size = img_size
-
-        self.fc = nn.Linear(d_model, patch_size * patch_size * n_channels)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.fc(x)
-        x = einops.rearrange(
-            x,
-            "b (h w) (p1 p2 c) -> b c (h p1) (w p2)",
-            h=self.img_size // self.patch_size,
-            p1=self.patch_size,
-            p2=self.patch_size,
-        )
-
-        return x
-
-
-class PixelUnembed(nn.Module):
-    def __init__(
-        self, d_model: int, n_channels: int, patch_size: int, img_size: int
-    ) -> None:
         super().__init__()
 
         self.grid = img_size // patch_size
