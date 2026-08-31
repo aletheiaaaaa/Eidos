@@ -115,7 +115,7 @@ class _Runner:
             )
 
         dataloader = DataLoader(
-            Stream(data),
+            Stream(data, cfg.seed),
             batch_size=cfg.batch_size,
             num_workers=cfg.num_workers,
             drop_last=True,

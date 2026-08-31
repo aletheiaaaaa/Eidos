@@ -1,6 +1,6 @@
 import torch
 from datasets import load_dataset
-from torch.utils.data import IterableDataset
+from torch.utils.data import IterableDataset, get_worker_info
 from torchvision import transforms
 
 from .configs import DataConfig
@@ -13,18 +13,23 @@ def class_prompt(name: str, template: str) -> str:
 
 
 class Stream(IterableDataset):
-    def __init__(self, cfg: DataConfig) -> None:
+    def __init__(self, cfg: DataConfig, seed: int = 42) -> None:
         self.cfg = cfg
+        self.seed = seed
 
-        self.transform = transforms.Compose(
-            [
+        resize = (
+            []
+            if cfg.preprocessed
+            else [
                 transforms.Resize(cfg.resolution),
                 transforms.CenterCrop(cfg.resolution),
-                transforms.ToTensor(),
             ]
         )
+        self.transform = transforms.Compose([*resize, transforms.ToTensor()])
 
-        self.stream = load_dataset(cfg.dataset, split=cfg.split, streaming=True)
+        self.stream = load_dataset(
+            cfg.dataset, split=cfg.split, streaming=not cfg.local
+        )
 
         features = self.stream.features
         if features is None or cfg.label_key not in features:
@@ -36,7 +41,23 @@ class Stream(IterableDataset):
         self.names = features[cfg.label_key].names
 
     def __iter__(self):
-        for example in self.stream:
+        stream = self.stream
+
+        if self.cfg.local:
+            if self.cfg.shuffle:
+                stream = stream.shuffle(seed=self.seed)
+
+            info = get_worker_info()
+            if info is not None:
+                stream = stream.shard(
+                    num_shards=info.num_workers, index=info.id, contiguous=False
+                )
+        elif self.cfg.shuffle:
+            stream = stream.shuffle(
+                seed=self.seed, buffer_size=self.cfg.shuffle_buffer
+            )
+
+        for example in stream:
             image = example[self.cfg.image_key]
             label = example[self.cfg.label_key]
 

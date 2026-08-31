@@ -1,7 +1,11 @@
 data:
-  dataset: ILSVRC/imagenet-1k
+  dataset: benjamin-paine/imagenet-1k-256x256
   split: train
   resolution: 256
+  preprocessed: true
+  local: true
+  shuffle: true
+  shuffle_buffer: 10000
   image_key: image
   label_key: label
   prompt_template: "a photo of a {}"
@@ -41,7 +45,7 @@ diffuser:
     mixed_precision: bf16
     compile: true
     log_interval: 50
-    wandb_project: "lumina"
+    wandb_project: "lumina-denoiser"
     save_interval: 5000
     sample_interval: 2500
     sample_prompts:

@@ -13,7 +13,7 @@ uv run accelerate launch --config_file accelerate.yaml -m lumina.cli train-denoi
 uv run lumina generate "a photo of a golden retriever"
 ```
 
-Both `ILSVRC/imagenet-1k` and the DINOv3 weights are gated, so run `hf auth login` first.
+Note that the DINOv3 weights are gated, so run `hf auth login` first.
 
 ## Config
 

@@ -101,6 +101,10 @@ class DataConfig:
     dataset: str = "ILSVRC/imagenet-1k"
     split: str = "train"
     resolution: int = 256
+    preprocessed: bool = False
+    local: bool = False
+    shuffle: bool = True
+    shuffle_buffer: int = 10_000
     image_key: str = "image"
     label_key: str = "label"
     prompt_template: str = "a photo of a {}"
