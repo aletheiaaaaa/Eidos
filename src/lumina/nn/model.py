@@ -2,13 +2,13 @@ import torch
 from torch import nn
 from transformers import CLIPTextModel, CLIPTokenizerFast
 
-from ..configs import DecoderConfig, DiffuserConfig, latest_checkpoint
+from ..configs import DecoderConfig, SamplerConfig, latest_checkpoint
 from .components import CaptionProj, DiTBlock, FinalBlock, ImgEmbed, TimeEmbed, Unembed
 from .latents import Decoder
 
 
 class DiT(nn.Module):
-    def __init__(self, cfg: DiffuserConfig) -> None:
+    def __init__(self, cfg: SamplerConfig) -> None:
         super(DiT, self).__init__()
         self.cfg = cfg
         self.seq_len = int((self.cfg.img_size / self.cfg.patch_size) ** 2)
@@ -73,10 +73,10 @@ class DiT(nn.Module):
         return x_out
 
 
-class Diffuser:
+class Sampler:
     def __init__(
         self,
-        cfg: DiffuserConfig,
+        cfg: SamplerConfig,
         decoder: DecoderConfig | None = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
         dit: DiT | None = None,
@@ -96,7 +96,7 @@ class Diffuser:
             self.load_stats(stats)
 
         if dit is None and model_path:
-            self.load_denoiser(model_path)
+            self.load_model(model_path)
 
         self.decoder = None
         weights = (
@@ -135,7 +135,7 @@ class Diffuser:
             if not torch.allclose(a, b, atol=1e-3):
                 print(
                     f"warning: {path} was trained with {key} {b.flatten().tolist()} "
-                    f"but the denoiser expects {a.flatten().tolist()}; "
+                    f"but the sampler expects {a.flatten().tolist()}; "
                     "the two saw different encoders"
                 )
 
@@ -156,7 +156,7 @@ class Diffuser:
 
         return self.decoder(latent)
 
-    def load_denoiser(self, path: str) -> None:
+    def load_model(self, path: str) -> None:
         state = torch.load(path, map_location=self.device, weights_only=True)
 
         if isinstance(state, dict) and "stats" in state:

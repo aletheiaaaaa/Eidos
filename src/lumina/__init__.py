@@ -3,9 +3,9 @@ from .configs import (
     DataConfig,
     DecoderConfig,
     DecoderTrainConfig,
-    DiffuserConfig,
-    DiffuserTrainConfig,
     DiTConfig,
+    SamplerConfig,
+    SamplerTrainConfig,
     load_config,
 )
 
@@ -15,7 +15,7 @@ __all__ = [
     "DecoderConfig",
     "DecoderTrainConfig",
     "DiTConfig",
-    "DiffuserConfig",
-    "DiffuserTrainConfig",
+    "SamplerConfig",
+    "SamplerTrainConfig",
     "load_config",
 ]

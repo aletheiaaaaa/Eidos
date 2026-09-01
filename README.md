@@ -9,7 +9,7 @@ Edit `config.yaml`, then
 ```sh
 uv sync
 uv run accelerate launch --config_file accelerate.yaml -m lumina.cli train-decoder # train RAE decoder
-uv run accelerate launch --config_file accelerate.yaml -m lumina.cli train-denoiser # train the model itself
+uv run accelerate launch --config_file accelerate.yaml -m lumina.cli train-sampler # train the model itself
 uv run lumina generate "a photo of a golden retriever"
 ```
 

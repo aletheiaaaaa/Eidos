@@ -6,21 +6,21 @@ from .configs import Config, latest_checkpoint, load_config
 DEFAULT_CONFIG = "config.yaml"
 
 
-def _cmd_train_denoiser(cfg: Config, args: argparse.Namespace) -> None:
+def _cmd_train_sampler(cfg: Config, args: argparse.Namespace) -> None:
     from accelerate.utils import set_seed
 
     from .nn.model import DiT
-    from .train import train_denoiser
+    from .train import train_sampler
 
-    set_seed(cfg.diffuser.train.seed)
+    set_seed(cfg.sampler.train.seed)
 
-    model = DiT(cfg.diffuser)
+    model = DiT(cfg.sampler)
 
-    train_denoiser(
+    train_sampler(
         model,
-        cfg.diffuser.train,
+        cfg.sampler.train,
         cfg.data,
-        diffuser=cfg.diffuser,
+        sampler=cfg.sampler,
         decoder=cfg.decoder,
         resume=args.resume,
     )
@@ -34,9 +34,9 @@ def _cmd_train_decoder(cfg: Config, args: argparse.Namespace) -> None:
 
     set_seed(cfg.decoder.train.seed)
 
-    decoder = Decoder(cfg.decoder, cfg.diffuser.img_size)
+    decoder = Decoder(cfg.decoder, cfg.sampler.img_size)
 
-    stats = args.stats or latest_checkpoint(cfg.diffuser.train.output_dir)
+    stats = args.stats or latest_checkpoint(cfg.sampler.train.output_dir)
 
     train_decoder(
         decoder,
@@ -51,21 +51,21 @@ def _cmd_generate(cfg: Config, args: argparse.Namespace) -> None:
     import torch
     from torchvision.utils import save_image
 
-    from .nn.model import Diffuser
+    from .nn.model import Sampler
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
 
-    path = args.checkpoint or latest_checkpoint(cfg.diffuser.train.output_dir)
+    path = args.checkpoint or latest_checkpoint(cfg.sampler.train.output_dir)
     if not path:
         raise SystemExit(
-            f"no denoiser weights in {cfg.diffuser.train.output_dir}; pass --checkpoint"
+            f"no sampler weights in {cfg.sampler.train.output_dir}; pass --checkpoint"
         )
 
     if not args.checkpoint:
         print(f"using {path}")
 
-    diffuser = Diffuser(cfg.diffuser, cfg.decoder, device=device, model_path=path)
-    images = diffuser.generate(
+    sampler = Sampler(cfg.sampler, cfg.decoder, device=device, model_path=path)
+    images = sampler.generate(
         args.prompt,
         num_images=args.num_images,
         num_steps=args.num_steps,
@@ -101,13 +101,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_denoise = sub.add_parser(
-        "train-denoiser", help="train the denoiser on the streamed dataset"
+        "train-sampler", help="train the sampler on the streamed dataset"
     )
     p_denoise.add_argument(
         "--resume",
         help="checkpoint to restore model, optimizer, scheduler and EMA from",
     )
-    p_denoise.set_defaults(func=_cmd_train_denoiser)
+    p_denoise.set_defaults(func=_cmd_train_sampler)
 
     p_dec = sub.add_parser(
         "train-decoder",
@@ -120,11 +120,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_dec.add_argument(
         "--stats",
         help="checkpoint to copy encoder statistics from "
-        "(defaults to the latest denoiser checkpoint, else fits its own)",
+        "(defaults to the latest sampler checkpoint, else fits its own)",
     )
     p_dec.set_defaults(func=_cmd_train_decoder)
 
-    p_gen = sub.add_parser("generate", help="sample images from a trained denoiser")
+    p_gen = sub.add_parser("generate", help="sample images from a trained sampler")
     p_gen.add_argument("prompt", help="text prompt")
     p_gen.add_argument("-n", "--num-images", type=int, default=4)
     p_gen.add_argument("-s", "--num-steps", type=int, default=2)

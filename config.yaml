@@ -14,7 +14,7 @@ data:
   n_stat_batches: 16
   clip: openai/clip-vit-large-patch14
 
-diffuser:
+sampler:
   img_size: 16
   patch_size: 1
   d_caption: 768
@@ -45,7 +45,7 @@ diffuser:
     mixed_precision: bf16
     compile: true
     log_interval: 50
-    wandb_project: "lumina-denoiser"
+    wandb_project: "lumina-sampler"
     save_interval: 5000
     sample_interval: 2500
     sample_prompts:

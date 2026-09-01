@@ -15,7 +15,7 @@ class DiTConfig:
 
 
 @dataclass
-class DiffuserTrainConfig:
+class SamplerTrainConfig:
     p_mean: float = -0.4
     p_std: float = 1.0
     p_ratio: float = 0.25
@@ -85,7 +85,7 @@ class DecoderConfig:
 
 
 @dataclass
-class DiffuserConfig:
+class SamplerConfig:
     img_size: int = 16
     patch_size: int = 1
     d_caption: int = 768
@@ -93,7 +93,7 @@ class DiffuserConfig:
     clip: str = "openai/clip-vit-large-patch14"
 
     dit: DiTConfig = field(default_factory=DiTConfig)
-    train: DiffuserTrainConfig = field(default_factory=DiffuserTrainConfig)
+    train: SamplerTrainConfig = field(default_factory=SamplerTrainConfig)
 
 
 @dataclass
@@ -117,7 +117,7 @@ class DataConfig:
 @dataclass
 class Config:
     data: DataConfig = field(default_factory=DataConfig)
-    diffuser: DiffuserConfig = field(default_factory=DiffuserConfig)
+    sampler: SamplerConfig = field(default_factory=SamplerConfig)
     decoder: DecoderConfig = field(default_factory=DecoderConfig)
 
 
@@ -171,8 +171,8 @@ def _coerce(typ: Any, value: Any, path: str) -> Any:
 
 _NESTED = {
     "DataConfig": DataConfig,
-    "DiffuserTrainConfig": DiffuserTrainConfig,
-    "DiffuserConfig": DiffuserConfig,
+    "SamplerTrainConfig": SamplerTrainConfig,
+    "SamplerConfig": SamplerConfig,
     "DiTConfig": DiTConfig,
     "DecoderConfig": DecoderConfig,
     "DecoderTrainConfig": DecoderTrainConfig,

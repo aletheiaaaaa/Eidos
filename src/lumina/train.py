@@ -20,13 +20,13 @@ from .configs import (
     DataConfig,
     DecoderConfig,
     DecoderTrainConfig,
-    DiffuserConfig,
-    DiffuserTrainConfig,
+    SamplerConfig,
+    SamplerTrainConfig,
     latest_checkpoint,
 )
 from .data import Stream, collate, collate_pixels
 from .nn.latents import Decoder, Discriminator, Encoder, PixelDiscriminator
-from .nn.model import Diffuser, DiT
+from .nn.model import DiT, Sampler
 
 
 def cosine_lr(n_warmup: int, max_steps: int):
@@ -43,6 +43,7 @@ def cosine_lr(n_warmup: int, max_steps: int):
 
 class EMA:
     def __init__(self, model: torch.nn.Module, decay: float) -> None:
+        self.model = model
         self.decay = decay
         self.shadow = {
             key: value.detach().clone().float()
@@ -51,8 +52,8 @@ class EMA:
         }
 
     @torch.no_grad()
-    def update(self, model: torch.nn.Module) -> None:
-        for key, value in model.state_dict().items():
+    def update(self) -> None:
+        for key, value in self.model.state_dict().items():
             if key in self.shadow:
                 self.shadow[key].lerp_(value.detach().float(), 1.0 - self.decay)
 
@@ -64,32 +65,32 @@ class EMA:
             if key in self.shadow:
                 self.shadow[key].copy_(value)
 
-    def weights(self, model: torch.nn.Module) -> dict:
+    def weights(self) -> dict:
         return {
             key: self.shadow[key].to(value.dtype)
-            for key, value in model.state_dict().items()
+            for key, value in self.model.state_dict().items()
             if key in self.shadow
         }
 
     @contextlib.contextmanager
-    def averaged(self, model: torch.nn.Module):
+    def averaged(self):
         backup = {
             key: value.detach().clone()
-            for key, value in model.state_dict().items()
+            for key, value in self.model.state_dict().items()
             if key in self.shadow
         }
-        model.load_state_dict(self.weights(model), strict=False)
+        self.model.load_state_dict(self.weights(), strict=False)
         try:
-            yield model
+            yield self.model
         finally:
-            model.load_state_dict(backup, strict=False)
+            self.model.load_state_dict(backup, strict=False)
 
 
 class _Runner:
     def __init__(
         self,
         model: torch.nn.Module,
-        cfg: DiffuserTrainConfig | DecoderTrainConfig,
+        cfg: SamplerTrainConfig | DecoderTrainConfig,
         data: DataConfig,
         collate_fn,
         tag: str,
@@ -190,7 +191,7 @@ class _Runner:
         if self.ema is None:
             return contextlib.nullcontext()
 
-        return self.ema.averaged(self.net)
+        return self.ema.averaged()
 
     def sample_dir(self) -> str:
         path = os.path.join(self.cfg.output_dir, "samples")
@@ -233,11 +234,7 @@ class _Runner:
         if not self.accel.is_main_process:
             return
 
-        weights = (
-            self.ema.weights(self.net)
-            if self.ema is not None
-            else self.net.state_dict()
-        )
+        weights = self.ema.weights() if self.ema is not None else self.net.state_dict()
 
         self.accel.save(
             {"model": weights, "stats": self.encoder.stats_dict()},
@@ -273,7 +270,7 @@ class _Runner:
                 self.scheduler.step()
 
                 if self.ema is not None:
-                    self.ema.update(self.net)
+                    self.ema.update()
 
                 value = loss.item()
                 lr = self.scheduler.get_last_lr()[0]
@@ -316,11 +313,11 @@ class _Runner:
         pbar.close()
 
 
-def train_denoiser(
+def train_sampler(
     model: DiT,
-    cfg: DiffuserTrainConfig,
+    cfg: SamplerTrainConfig,
     data: DataConfig,
-    diffuser: DiffuserConfig | None = None,
+    sampler: SamplerConfig | None = None,
     decoder: DecoderConfig | None = None,
     resume: str | None = None,
 ):
@@ -331,7 +328,7 @@ def train_denoiser(
         cfg,
         data,
         functools.partial(collate, tokenizer=tokenizer, max_tokens=data.max_tokens),
-        "denoiser",
+        "sampler",
     )
     accel, device = runner.accel, runner.device
 
@@ -386,11 +383,11 @@ def train_denoiser(
 
         return adaptive_l2(u - tgt), {}
 
-    sampler = None
+    pipeline = None
 
     can_sample = (
         bool(cfg.sample_prompts)
-        and diffuser is not None
+        and sampler is not None
         and decoder is not None
         and bool(latest_checkpoint(decoder.train.output_dir, "decoder.pt"))
     )
@@ -402,15 +399,15 @@ def train_denoiser(
         )
 
     def log_samples() -> None:
-        nonlocal sampler
+        nonlocal pipeline
 
         accel.wait_for_everyone()
         if not accel.is_main_process:
             return
 
-        if sampler is None:
-            sampler = Diffuser(
-                diffuser,
+        if pipeline is None:
+            pipeline = Sampler(
+                sampler,
                 decoder,
                 device=device,
                 dit=runner.net,
@@ -421,7 +418,7 @@ def train_denoiser(
 
         with runner.averaged():
             images = [
-                sampler.generate(
+                pipeline.generate(
                     prompt,
                     num_images=1,
                     num_steps=cfg.sample_steps,
